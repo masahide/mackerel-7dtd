@@ -136,7 +136,7 @@ func (m *mackerelAPI) getPlayersOnline() []Player {
 		if m.Debug {
 			log.Printf("RESPONSE:\n%s", respDump(resp))
 		}
-		log.Fatalf("Error reading response body: ", err)
+		log.Fatalf("Error reading response body: %s", err)
 		return res
 	}
 	// JSONをパース
