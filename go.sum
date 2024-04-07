@@ -1,0 +1,4 @@
+github.com/kelseyhightower/envconfig v1.4.0 h1:Im6hONhd3pLkfDFsbRgu68RDNkGF1r3dvMUtDTo2cv8=
+github.com/kelseyhightower/envconfig v1.4.0/go.mod h1:cccZRl6mQpaq41TPp5QxidR+Sa3axMbJDNb//FQX6Gg=
+github.com/mackerelio/mackerel-client-go v0.31.0 h1:oUBwuJzZkvhSFf7C7zpOBej8jM0kITUz7eVMAINIfO4=
+github.com/mackerelio/mackerel-client-go v0.31.0/go.mod h1:b4qVMQi+w4rxtKQIFycLWXNBtIi9d0r571RzYmg/aXo=
