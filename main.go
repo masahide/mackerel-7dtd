@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/kelseyhightower/envconfig"
 	"github.com/mackerelio/mackerel-client-go"
+	"github.com/masahide/mackerel-7dtd/pkg/telnet"
 )
 
 const (
@@ -23,12 +23,13 @@ const (
 )
 
 type env struct {
-	Debug            bool   `envconfig:"DEBUG" default:"false"`
-	MackerelHostID   string `envconfig:"MACKEREL_HOST_ID"`
-	MackerelAPIKey   string `envconfig:"MACKEREL_API_KEY"`
-	PlayersAPIURL    string `envconfig:"PLAYERS_API_URL" default:""`
-	PlayersAPISecret string `envconfig:"PLAYERS_API_SECRET" default:""`
-	PlayersAPIUser   string `envconfig:"PLAYERS_API_USER" default:""`
+	Debug          bool   `envconfig:"DEBUG" default:"false"`
+	MackerelHostID string `envconfig:"MACKEREL_HOST_ID"`
+	MackerelAPIKey string `envconfig:"MACKEREL_API_KEY"`
+	telnet.Env
+	// PlayersAPIURL    string `envconfig:"PLAYERS_API_URL" default:""`
+	// PlayersAPISecret string `envconfig:"PLAYERS_API_SECRET" default:""`
+	// PlayersAPIUser   string `envconfig:"PLAYERS_API_USER" default:""`
 }
 
 type MetricDetail struct {
@@ -51,6 +52,7 @@ type MetricValue struct {
 	Value  float64 `json:"value"`
 }
 
+/*
 // Player 構造体を更新して、新しいフィールドを含む
 type Player struct {
 	SteamID         string   `json:"steamid"`
@@ -77,12 +79,14 @@ type Position struct {
 	Y float64 `json:"y"`
 	Z float64 `json:"z"`
 }
+*/
 
 type mackerelAPI struct {
 	env
 	mkr       *mackerel.Client
 	steamIDs  []string
 	stateFile string
+	t         *telnet.Telnet7days
 }
 
 func jsonDump(v any) string {
@@ -107,6 +111,7 @@ func respDump(resp *http.Response) string {
 	return string(respDump)
 }
 
+/*
 func (m *mackerelAPI) getPlayersOnline() []Player {
 	res := []Player{}
 	req, err := http.NewRequest(http.MethodGet, m.PlayersAPIURL, nil)
@@ -149,37 +154,38 @@ func (m *mackerelAPI) getPlayersOnline() []Player {
 	}
 	return res
 }
+*/
 
 func trimSteam(steamID string) string {
 	return strings.TrimPrefix(steamID, "Steam_")
 }
 
-func (m *mackerelAPI) createMetrics(players []Player, now time.Time) []*mackerel.MetricValue {
+func (m *mackerelAPI) createMetrics(players []telnet.Player, now time.Time) []*mackerel.MetricValue {
 	res := make([]*mackerel.MetricValue, 0, len(players)*4)
 	for _, player := range players {
-		id := trimSteam(player.SteamID)
-		if player.Online {
-			res = append(res, &mackerel.MetricValue{
-				Name:  "custom.player.level." + id,
-				Time:  now.Unix(),
-				Value: player.Level,
-			})
-			res = append(res, &mackerel.MetricValue{
-				Name:  "custom.player.x." + id,
-				Time:  now.Unix(),
-				Value: player.Position.X,
-			})
-			res = append(res, &mackerel.MetricValue{
-				Name:  "custom.player.y." + id,
-				Time:  now.Unix(),
-				Value: player.Position.Y,
-			})
+		id := trimSteam(player.PltfmID)
+		res = append(res, &mackerel.MetricValue{
+			Name:  "custom.player.level." + id,
+			Time:  now.Unix(),
+			Value: player.Level,
+		})
+		res = append(res, &mackerel.MetricValue{
+			Name:  "custom.player.x." + id,
+			Time:  now.Unix(),
+			Value: player.Position.X,
+		})
+		res = append(res, &mackerel.MetricValue{
+			Name:  "custom.player.y." + id,
+			Time:  now.Unix(),
+			Value: player.Position.Y,
+		})
+		/*
 			res = append(res, &mackerel.MetricValue{
 				Name:  "custom.player.totalplaytime." + id,
 				Time:  now.Unix(),
 				Value: float64(player.TotalPlayTime),
 			})
-		}
+		*/
 	}
 	return res
 }
@@ -231,10 +237,10 @@ func (m *mackerelAPI) post(url string, data any) {
 	log.Println("Metrics posted successfully")
 }
 
-func getSteamIDs(players []Player) []string {
+func getSteamIDs(players []telnet.Player) []string {
 	ids := make([]string, len(players))
 	for i, player := range players {
-		ids[i] = trimSteam(player.SteamID)
+		ids[i] = trimSteam(player.PltfmID)
 	}
 	return ids
 }
@@ -251,10 +257,10 @@ func compeareSteamIDs(steamIDs1, steamIDs2 []string) bool {
 	return true
 }
 
-func makeDef(players []Player) []MetricDef {
+func makeDef(players []telnet.Player) []MetricDef {
 	metricDefs := make([]MetricDef, 0, len(players)*4)
 	for _, player := range players {
-		id := trimSteam(player.SteamID)
+		id := trimSteam(player.PltfmID)
 		metricDefs = append(metricDefs, MetricDef{
 			Name:        "custom.player.level",
 			DisplayName: "レベル",
@@ -316,7 +322,12 @@ func makeDef(players []Player) []MetricDef {
 }
 
 func (m *mackerelAPI) job() {
-	players := m.getPlayersOnline()
+
+	players, err := m.t.GetPlayers()
+	if err != nil {
+		log.Printf("Error getting players: %s", err)
+		return
+	}
 	ids := getSteamIDs(players)
 	if len(ids) == 0 {
 		if m.Debug {
@@ -336,7 +347,7 @@ func (m *mackerelAPI) job() {
 		log.Println(jsonDump(metrics))
 		return
 	}
-	err := m.mkr.PostHostMetricValuesByHostID(m.MackerelHostID, metrics)
+	err = m.mkr.PostHostMetricValuesByHostID(m.MackerelHostID, metrics)
 	if err != nil {
 		log.Println(err)
 	}
@@ -368,7 +379,11 @@ func main() {
 	uid := os.Getuid()
 	dir := filepath.Join(tmpDir, fmt.Sprintf("%s_%d", stateDirName, uid))
 	fpath := filepath.Join(dir, stateFileName)
-	m := &mackerelAPI{e, mackerel.NewClient(e.MackerelAPIKey), []string{}, fpath}
+	m := &mackerelAPI{e, mackerel.NewClient(e.MackerelAPIKey), []string{}, fpath,
+		&telnet.Telnet7days{
+			Env: e.Env,
+		},
+	}
 	os.MkdirAll(dir, 0755)
 	if err := readState(fpath, &m.steamIDs); err != nil {
 		m.steamIDs = []string{}
