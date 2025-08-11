@@ -146,6 +146,7 @@ func (m *mackerelAPI) getPlayersOnline() []Player {
 	}
 	// JSONをパース
 	err = json.Unmarshal(body, &res)
+	err = json.Unmarshal(body, &res)
 	if err != nil {
 		if m.Debug {
 			log.Printf("RESPONSE:\n%s", respDump(resp))
@@ -257,6 +258,10 @@ func compeareSteamIDs(steamIDs1, steamIDs2 []string) bool {
 	return true
 }
 
+func normalizeDisplayName(name string) string {
+	return strings.ReplaceAll(name, " ", "_")
+}
+
 func makeDef(players []telnet.Player) []MetricDef {
 	metricDefs := make([]MetricDef, 0, len(players)*4)
 	for _, player := range players {
@@ -265,12 +270,10 @@ func makeDef(players []telnet.Player) []MetricDef {
 			Name:        "custom.player.level",
 			DisplayName: "レベル",
 			Unit:        "integer",
-			// "float", "integer", "percentage", "seconds", "milliseconds",
-			//"bytes", "bytes/sec", "bits/sec", "iops"
 			Metrics: []MetricDetail{
 				{
 					Name:        "custom.player.level." + id,
-					DisplayName: player.Name,
+					DisplayName: normalizeDisplayName(player.Name),
 					IsStacked:   false,
 				},
 			},
@@ -279,12 +282,10 @@ func makeDef(players []telnet.Player) []MetricDef {
 			Name:        "custom.player.x",
 			DisplayName: "位置X",
 			Unit:        "float",
-			// "float", "integer", "percentage", "seconds", "milliseconds",
-			//"bytes", "bytes/sec", "bits/sec", "iops"
 			Metrics: []MetricDetail{
 				{
 					Name:        "custom.player.x." + id,
-					DisplayName: player.Name,
+					DisplayName: normalizeDisplayName(player.Name),
 					IsStacked:   false,
 				},
 			},
@@ -293,12 +294,10 @@ func makeDef(players []telnet.Player) []MetricDef {
 			Name:        "custom.player.y",
 			DisplayName: "位置Y",
 			Unit:        "float",
-			// "float", "integer", "percentage", "seconds", "milliseconds",
-			//"bytes", "bytes/sec", "bits/sec", "iops"
 			Metrics: []MetricDetail{
 				{
 					Name:        "custom.player.y." + id,
-					DisplayName: player.Name,
+					DisplayName: normalizeDisplayName(player.Name),
 					IsStacked:   false,
 				},
 			},
@@ -307,12 +306,10 @@ func makeDef(players []telnet.Player) []MetricDef {
 			Name:        "custom.player.totalplaytime",
 			DisplayName: "プレイ時間",
 			Unit:        "seconds",
-			// "float", "integer", "percentage", "seconds", "milliseconds",
-			//"bytes", "bytes/sec", "bits/sec", "iops"
 			Metrics: []MetricDetail{
 				{
 					Name:        "custom.player.totalplaytime." + id,
-					DisplayName: player.Name,
+					DisplayName: normalizeDisplayName(player.Name),
 					IsStacked:   false,
 				},
 			},
