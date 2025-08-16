@@ -32,7 +32,7 @@ type Player struct {
 }
 
 type Env struct {
-	ServerAddr string `default:"localhost:8081"`
+	ServerAddr string `default:""`
 	TelnetPass string
 }
 

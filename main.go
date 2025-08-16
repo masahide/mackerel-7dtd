@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +16,11 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	"github.com/mackerelio/mackerel-client-go"
 	"github.com/masahide/mackerel-7dtd/pkg/telnet"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/metric"
+	sdkMetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 const (
@@ -318,19 +324,19 @@ func makeDef(players []telnet.Player) []MetricDef {
 	return metricDefs
 }
 
-func (m *mackerelAPI) job() {
+func (m *mackerelAPI) job() []telnet.Player {
 
 	players, err := m.t.GetPlayers()
 	if err != nil {
 		log.Printf("Error getting players: %s", err)
-		return
+		return nil
 	}
 	ids := getSteamIDs(players)
 	if len(ids) == 0 {
 		if m.Debug {
 			log.Println("No players online")
 		}
-		return
+		return []telnet.Player{}
 	}
 	if !compeareSteamIDs(m.steamIDs, ids) {
 		m.postGraphDef(makeDef(players))
@@ -342,12 +348,13 @@ func (m *mackerelAPI) job() {
 	metrics := m.createMetrics(players, time.Now())
 	if m.Debug {
 		log.Println(jsonDump(metrics))
-		return
+		return players
 	}
 	err = m.mkr.PostHostMetricValuesByHostID(m.MackerelHostID, metrics)
 	if err != nil {
 		log.Println(err)
 	}
+	return players
 }
 func readState(file string, v any) error {
 	f, err := os.Open(file)
@@ -376,16 +383,67 @@ func main() {
 	uid := os.Getuid()
 	dir := filepath.Join(tmpDir, fmt.Sprintf("%s_%d", stateDirName, uid))
 	fpath := filepath.Join(dir, stateFileName)
-	m := &mackerelAPI{e, mackerel.NewClient(e.MackerelAPIKey), []string{}, fpath,
+	mkr := &mackerelAPI{e, mackerel.NewClient(e.MackerelAPIKey), []string{}, fpath,
 		&telnet.Telnet7days{
 			Env: e.Env,
 		},
 	}
 	os.MkdirAll(dir, 0755)
-	if err := readState(fpath, &m.steamIDs); err != nil {
-		m.steamIDs = []string{}
-		saveState(fpath, m.steamIDs)
+	if err := readState(fpath, &mkr.steamIDs); err != nil {
+		mkr.steamIDs = []string{}
+		saveState(fpath, mkr.steamIDs)
 		log.Printf("Create State file: %s", fpath)
 	}
-	m.job()
+	players := mkr.job()
+	putOtelMetrics(players)
+}
+
+func setupMeter() (metric.Meter, func()) {
+	//endpoint := "https://otlp-gateway-prod-ap-southeast-0.grafana.net/otlp/v1/metrics"
+	//authHeader := "Basic " + os.Getenv("OTEL_AUTH_BASIC") // <- 事前に base64 を環境で用意
+
+	exp, err := otlpmetrichttp.New(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	//
+	reader := sdkMetric.NewPeriodicReader(exp, sdkMetric.WithInterval(24*time.Hour))
+	mp := sdkMetric.NewMeterProvider(sdkMetric.WithReader(reader))
+	otel.SetMeterProvider(mp)
+	return mp.Meter("sdtd"), func() {
+		if err := mp.Shutdown(context.Background()); err != nil {
+			log.Fatalf("shutdown: %v", err)
+		}
+	}
+}
+
+func putOtelMetrics(players []telnet.Player) {
+	meter, shutdown := setupMeter()
+	defer shutdown()
+
+	// ObservableGauge を登録：収集タイミング毎にコールバックで現在値を返す
+	levelGauge, _ := meter.Float64ObservableGauge("sdtd.player.level")
+	posXGauge, _ := meter.Float64ObservableGauge("sdtd.player.pos_x")
+	posYGauge, _ := meter.Float64ObservableGauge("sdtd.player.pos_y")
+
+	serverAttr := attribute.String("server", "my7dtd")
+
+	_, err := meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
+		for _, p := range players {
+			steam := strings.TrimPrefix(p.PltfmID, "Steam_")
+			attrs := []attribute.KeyValue{
+				serverAttr,
+				attribute.String("steam_id", steam),
+				attribute.String("name", p.Name),
+			}
+			o.ObserveFloat64(levelGauge, float64(p.Level), metric.WithAttributeSet(attribute.NewSet(attrs...)))
+			o.ObserveFloat64(posXGauge, p.Position.X, metric.WithAttributeSet(attribute.NewSet(attrs...)))
+			o.ObserveFloat64(posYGauge, p.Position.Y, metric.WithAttributeSet(attribute.NewSet(attrs...)))
+		}
+		return nil
+	}, levelGauge, posXGauge, posYGauge)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
