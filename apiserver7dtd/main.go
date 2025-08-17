@@ -139,10 +139,9 @@ type Config struct {
 	GlobalTimeout time.Duration `envconfig:"GLOBAL_TIMEOUT" default:"30s"`
 
 	// 実行する Linux コマンド（sh -c で実行）
-	StartCmd           string `envconfig:"START_CMD" default:"ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml up -d"`
+	StartCmd           string `envconfig:"START_CMD" default:"ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml up -d"`
 	StopCmd            string `envconfig:"STOP_CMD" default:"/usr/bin/systemctl stop 7dtd.service"`
-	RestartCmd         string `envconfig:"RESTART_CMD" default:"/usr/bin/systemctl restart 7dtd.service"`
-	StatusCmd          string `envconfig:"STATUS_CMD" default:"ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml ps"`
+	StatusCmd          string `envconfig:"STATUS_CMD" default:"ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml ps"`
 	ComposeServiceName string `envconfig:"COMPOSE_SERVICE" default:"7dtdserver"`
 
 	APIBaseURL string `envconfig:"API_BASE_URL"  default:"http://127.0.0.1:8088/api"`
@@ -156,10 +155,9 @@ var appCfg = Config{
 		APIAddr:            ":8088",
 		ReadHeaderTimeout:  5 * time.Second,
 		GlobalTimeout:      30 * time.Second,
-		StartCmd:           "ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml up -d",
+		StartCmd:           "ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml up -d",
 		StopCmd:            "/usr/bin/systemctl stop 7dtd.service",
-		RestartCmd:         "/usr/bin/systemctl restart 7dtd.service",
-		StatusCmd:          "ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml ps",
+		StatusCmd:          "ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml ps",
 		ComposeServiceName: "7dtdserver",
 	*/
 }
@@ -497,6 +495,7 @@ var (
 
 // docker compose ps の出力から、対象サービス行を見つけて state/notes を返す
 func parseComposePS(output, service string) (state string, notes string) {
+	log.Printf("output: %s", output)
 	if strings.TrimSpace(output) == "" || strings.TrimSpace(service) == "" {
 		return "unknown", ""
 	}

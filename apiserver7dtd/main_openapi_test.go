@@ -158,7 +158,7 @@ func TestOpenAPI_ServerStatus(t *testing.T) {
 	// テスト用設定（Composeサービス名・コマンドは何でもOK：実行はフェイク）
 	cfg, _ := loadConfigFromEnv()
 	cfg.ComposeServiceName = "7dtdserver"
-	cfg.StatusCmd = `ssh 7dtd01 "docker compose -f /home/masahide/work/7dtd/docker-compose.yml ps"`
+	cfg.StatusCmd = `ssh 7dtd01 "docker compose -f /home/7dtd/docker-compose.yml ps"`
 
 	// appCfg を一時的に差し替え（buildRoutes は cfg を使って起動）
 	prevCfg := appCfg
@@ -172,7 +172,7 @@ func TestOpenAPI_ServerStatus(t *testing.T) {
 	_, rt := loadOpenAPISpecWithServer(t, ts.URL)
 
 	// サンプル出力（Up）
-	upOut := `time="2025-08-17T14:02:06+09:00" level=warning msg="/home/masahide/work/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove it to avoid potential confusion"
+	upOut := `time="2025-08-17T14:02:06+09:00" level=warning msg="/home/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove it to avoid potential confusion"
 NAME         IMAGE             COMMAND                  SERVICE      CREATED        STATUS        PORTS
 7dtdserver   7dtd-7dtdserver   "/home/sdtdserver/op…"   7dtdserver   41 hours ago   Up 41 hours   0.0.0.0:8080-8082->8080-8082/tcp, [::]:8080-8082->8080-8082/tcp, 0.0.0.0:26900->26900/tcp, [::]:26900->26900/tcp, 0.0.0.0:26900-26902->26900-26902/udp, [::]:26900-26902->26900-26902/udp
 `
@@ -233,8 +233,8 @@ func TestOpenAPI_StartStopRestart(t *testing.T) {
 	// 設定（コマンド文字列の一部にマッチさせやすいよう、簡潔な match を用意）
 	cfg, _ := loadConfigFromEnv()
 	cfg.ComposeServiceName = "7dtdserver"
-	cfg.StartCmd = `ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml up -d`
-	cfg.StopCmd = `ssh 7dtd01 docker compose -f //home/masahide/work/7dtd/docker-compose.yml down`
+	cfg.StartCmd = `ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml up -d`
+	cfg.StopCmd = `ssh 7dtd01 docker compose -f //home/7dtd/docker-compose.yml down`
 
 	prev := appCfg
 	appCfg = cfg
@@ -244,7 +244,7 @@ func TestOpenAPI_StartStopRestart(t *testing.T) {
 	defer ts.Close()
 
 	// 既に起動済みのときの出力（あなたの実測値）
-	upFresh := `time="2025-08-17T15:00:58+09:00" level=warning msg="/home/masahide/work/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove
+	upFresh := `time="2025-08-17T15:00:58+09:00" level=warning msg="/home/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove
 it to avoid potential confusion"
  Network a_my-network  Creating
  Network a_my-network  Created
@@ -252,11 +252,11 @@ it to avoid potential confusion"
  Container 7dtdserver  Created
  Container 7dtdserver  Starting
  Container 7dtdserver  Started`
-	upAlready := `time="2025-08-17T14:27:41+09:00" level=warning msg="/home/masahide/work/7dtd/docker-compose.yml: the attribute ` +
+	upAlready := `time="2025-08-17T14:27:41+09:00" level=warning msg="/home/7dtd/docker-compose.yml: the attribute ` +
 		"`version`" + ` is obsolete, it will be ignored, please remove it to avoid potential confusion"
  Container 7dtdserver  Running
 `
-	downFresh := `time="2025-08-17T15:01:06+09:00" level=warning msg="/home/masahide/work/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove
+	downFresh := `time="2025-08-17T15:01:06+09:00" level=warning msg="/home/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove
 it to avoid potential confusion"
  Container 7dtdserver  Stopping
  Container 7dtdserver  Stopped
@@ -265,7 +265,7 @@ it to avoid potential confusion"
  Network a_my-network  Removing
  Network a_my-network  Removed
 `
-	downAlready := `time="2025-08-17T15:01:12+09:00" level=warning msg="/home/masahide/work/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove
+	downAlready := `time="2025-08-17T15:01:12+09:00" level=warning msg="/home/7dtd/docker-compose.yml: the attribute ` + "`version`" + ` is obsolete, it will be ignored, please remove
 it to avoid potential confusion"
 `
 	runner := &scriptedRunner{
