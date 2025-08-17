@@ -233,6 +233,23 @@ type ExecResult struct {
 	DurationMs int64     `json:"durationMs"`
 }
 
+// --- Response DTOs (OpenAPI準拠) ---
+type OperationResult struct {
+	Status string     `json:"status"`
+	Note   *string    `json:"note,omitempty"`
+	Exec   ExecResult `json:"exec"`
+}
+
+type RestartExec struct {
+	Stop  ExecResult `json:"stop"`
+	Start ExecResult `json:"start"`
+}
+
+type RestartOperationResult struct {
+	Status string      `json:"status"`
+	Exec   RestartExec `json:"exec"`
+}
+
 type CommandRunner interface {
 	Run(ctx context.Context, command string) (ExecResult, error)
 }
@@ -611,12 +628,14 @@ func serverStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, note := detectStartStatus(res.Output)
-	payload := map[string]any{
-		"status": st,
-		"exec":   res,
-	}
+	var notePtr *string
 	if note != "" {
-		payload["note"] = note
+		notePtr = &note
+	}
+	payload := OperationResult{
+		Status: st,
+		Note:   notePtr,
+		Exec:   res,
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -634,12 +653,14 @@ func serverStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, note := detectStopStatus(res.Output)
-	payload := map[string]any{
-		"status": st,
-		"exec":   res,
-	}
+	var notePtr *string
 	if note != "" {
-		payload["note"] = note
+		notePtr = &note
+	}
+	payload := OperationResult{
+		Status: st,
+		Note:   notePtr,
+		Exec:   res,
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -664,13 +685,14 @@ func serverRestart(w http.ResponseWriter, r *http.Request) {
 	if startStatus == "starting" {
 		status = "restarting"
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status": status,
-		"exec": map[string]any{
-			"stop":  res.Stop,
-			"start": res.Start,
+	payload := RestartOperationResult{
+		Status: status,
+		Exec: RestartExec{
+			Stop:  res.Stop,
+			Start: res.Start,
 		},
-	})
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // --- 簡易HTTP GET（ヘッダ付き） ---
