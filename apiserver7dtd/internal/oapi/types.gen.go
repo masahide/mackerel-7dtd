@@ -156,6 +156,11 @@ type SummaryPlayer struct {
 	Stamina *float32 `json:"stamina"`
 }
 
+// GetServerLogsParams defines parameters for GetServerLogs.
+type GetServerLogsParams struct {
+	Lines *int `form:"lines,omitempty" json:"lines,omitempty"`
+}
+
 // GetServerSummaryParams defines parameters for GetServerSummary.
 type GetServerSummaryParams struct {
 	IncludePositions *bool `form:"includePositions,omitempty" json:"includePositions,omitempty"`

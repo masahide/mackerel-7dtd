@@ -118,6 +118,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /server/logs:
+    get:
+      operationId: getServerLogs
+      summary: 直近のサーバーログ取得
+      parameters:
+        - name: lines
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 20 }
+      responses:
+        "200":
+          description: ログ取得成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      lines:
+                        type: array
+                        items: { type: string }
+                  meta:
+                    type: object
+                    properties:
+                      exec:
+                        $ref: "#/components/schemas/ExecResult"
+        "400":
+          description: 不正なパラメータ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: コマンド実行失敗
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   securitySchemes:
     BearerAuth:

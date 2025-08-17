@@ -422,6 +422,77 @@
         "summary": "ヘルスチェック"
       }
     },
+    "/server/logs": {
+      "get": {
+        "operationId": "getServerLogs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "lines",
+            "schema": {
+              "default": 20,
+              "maximum": 2000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "lines": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "meta": {
+                      "properties": {
+                        "exec": {
+                          "$ref": "#/components/schemas/ExecResult"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ログ取得成功"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "不正なパラメータ"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "コマンド実行失敗"
+          }
+        },
+        "summary": "直近のサーバーログ取得"
+      }
+    },
     "/server/restart": {
       "post": {
         "operationId": "restartServer",

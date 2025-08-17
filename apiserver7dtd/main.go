@@ -135,9 +135,12 @@ type Config struct {
 	GlobalTimeout time.Duration `envconfig:"GLOBAL_TIMEOUT" default:"30s"`
 
 	// 実行する Linux コマンド（sh -c で実行）
-	StartCmd           string `envconfig:"START_CMD" default:"ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml up -d"`
-	StopCmd            string `envconfig:"STOP_CMD" default:"/usr/bin/systemctl stop 7dtd.service"`
-	StatusCmd          string `envconfig:"STATUS_CMD" default:"ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml ps"`
+	StartCmd  string `envconfig:"START_CMD" default:"ssh 7dtd01 docker compose -f /home/7dtd/docker-compose.yml up -d"`
+	StopCmd   string `envconfig:"STOP_CMD" default:"/usr/bin/systemctl stop 7dtd.service"`
+	StatusCmd string `envconfig:"STATUS_CMD" default:"ssh 7dtd01 'docker compose -f /home/7dtd/docker-compose.yml ps"`
+	// Dockerログ取得用ベースコマンド（tailは付けない）。
+	// 例: ssh 7dtd01 'docker compose -f /home/7dtd/docker-compose.yml logs'
+	LogsCmd            string `envconfig:"LOGS_CMD" default:"ssh 7dtd01 'docker compose -f /home/7dtd/docker-compose.yml logs'"`
 	ComposeServiceName string `envconfig:"COMPOSE_SERVICE" default:"7dtdserver"`
 
 	APIBaseURL string `envconfig:"API_BASE_URL"  default:"http://127.0.0.1:8088/api"`
@@ -366,6 +369,46 @@ func serverStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// 直近ログ取得: LOGS_CMD を実行し、末尾 lines 件を返す
+func serverLogs(w http.ResponseWriter, r *http.Request) {
+	lines, err := qInt(r, "lines", 20, 1, 2000)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]any{
+				"code":    "INVALID_PARAM",
+				"message": err.Error(),
+			},
+		})
+		return
+	}
+	// tail -n は呼び出し側で付与する
+	cmd := fmt.Sprintf("%s | tail -n %d'", strings.TrimLeft(appCfg.LogsCmd, "'"), lines)
+	res, runErr := cmdRunner.Run(r.Context(), cmd)
+	if runErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": map[string]any{
+				"code":    "COMMAND_FAILED",
+				"message": runErr.Error(),
+				"details": map[string]any{"exec": res},
+			},
+		})
+		return
+	}
+	// 出力を行単位に分割
+	out := strings.Split(res.Output, "\n")
+	if len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": map[string]any{
+			"lines": out,
+		},
+		"meta": map[string]any{
+			"exec": res,
+		},
+	})
+}
+
 // =====================
 // ルーティング/起動
 // =====================
@@ -381,6 +424,7 @@ func buildRoutes(cfg Config) http.Handler {
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /server/status", serverStatus)
 	mux.HandleFunc("GET /server/summary", serverSummaryHandler(cfg))
+	mux.HandleFunc("GET /server/logs", serverLogs)
 	mux.HandleFunc("POST /server/start", serverStart)
 	mux.HandleFunc("POST /server/stop", serverStop)
 	mux.HandleFunc("POST /server/restart", serverRestart)
