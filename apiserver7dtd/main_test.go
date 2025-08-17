@@ -12,6 +12,17 @@ import (
 	yaml "github.com/oasdiff/yaml3"
 )
 
+func TestMain(m *testing.M) {
+	// 認証をテストでは無効化
+	_ = os.Setenv("ALLOW_NO_AUTH", "true")
+
+	// 念のためダミー値も入れておく（使われないが将来のため）
+	_ = os.Setenv("AUTH_BEARER_TOKEN", "test-bearer")
+	_ = os.Setenv("API_KEY", "test-apikey")
+
+	os.Exit(m.Run())
+}
+
 func TestOpenAPIYAML_EnvOverride(t *testing.T) {
 	t.Setenv("OPSA_OPENAPI_SERVERS", "https://ops.example.com, https://ops2.example.com")
 

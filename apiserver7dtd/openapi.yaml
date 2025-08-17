@@ -7,6 +7,7 @@ servers:
   - url: https://ops.example.com
 security:
   - BearerAuth: []
+  - ApiKeyAuth: []
 paths:
   /health:
     get:
@@ -123,6 +124,10 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
   schemas:
     ServerStatus:
       type: object

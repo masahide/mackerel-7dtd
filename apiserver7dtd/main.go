@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -121,20 +122,15 @@ var docsFS embed.FS
 // 設定: envconfig 対応
 // =====================
 type Config struct {
-	// リッスンアドレス（例 :8088）
 	APIAddr string `envconfig:"API_ADDR" default:":8088"`
 
-	// /docs/openapi.yaml の servers: を上書き
 	// 例: "https://ops.example.com,https://ops2.example.com"
 	OpenAPIServers []string `envconfig:"OPENAPI_SERVERS"`
-
 	// 単一の公開URL。OpenAPIServers が空のときに使用。
 	// 例: "https://ops.example.com"
 	PublicBaseURL string `envconfig:"PUBLIC_BASE_URL"`
-
 	// サーバーの ReadHeaderTimeout
 	ReadHeaderTimeout time.Duration `envconfig:"READ_HEADER_TIMEOUT" default:"5s"`
-
 	// 全体のフェイルセーフ・タイムアウト（ミドルウェア）
 	GlobalTimeout time.Duration `envconfig:"GLOBAL_TIMEOUT" default:"30s"`
 
@@ -147,6 +143,10 @@ type Config struct {
 	APIBaseURL string `envconfig:"API_BASE_URL"  default:"http://127.0.0.1:8088/api"`
 	APIUser    string `envconfig:"API_USER"  default:""`
 	APISecret  string `envconfig:"API_SECRET" default:""`
+
+	AuthBearerToken string `envconfig:"AUTH_BEARER_TOKEN"`             // 例: 長いランダム文字列
+	APIKey          string `envconfig:"API_KEY"`                       // 例: 代替のAPIキー(任意)
+	AllowNoAuth     bool   `envconfig:"ALLOW_NO_AUTH" default:"false"` // 一時無効化用
 }
 
 // グローバル設定（テスト互換のため維持）
@@ -391,6 +391,7 @@ func buildRoutes(cfg Config) http.Handler {
 	return chain(mux,
 		recoverMW,
 		logMW,
+		authMW(cfg.AuthBearerToken, cfg.APIKey, cfg.AllowNoAuth),
 		timeoutMW(cfg.GlobalTimeout),
 	)
 }
@@ -961,5 +962,57 @@ func serverSummaryHandler(cfg Config) http.HandlerFunc {
 		}
 
 		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+func authMW(bearerToken, apiKey string, allowNoAuth bool) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// docs は常に無認可でOK
+			if strings.HasPrefix(r.URL.Path, "/docs/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// （任意）/health を無認証にしたい場合はここでバイパス
+			if r.URL.Path == "/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if allowNoAuth {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			ok := false
+			if bearerToken != "" {
+				if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
+					tok := strings.TrimPrefix(v, "Bearer ")
+					if subtle.ConstantTimeCompare([]byte(tok), []byte(bearerToken)) == 1 {
+						ok = true
+					}
+				}
+			}
+			if !ok && apiKey != "" {
+				if v := r.Header.Get("X-API-Key"); subtle.ConstantTimeCompare([]byte(v), []byte(apiKey)) == 1 {
+					ok = true
+				}
+			}
+
+			if !ok {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				if bearerToken != "" {
+					w.Header().Set("WWW-Authenticate", `Bearer realm="7dtd-ops"`)
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]any{
+						"code":    "UNAUTHORIZED",
+						"message": "missing or invalid credentials",
+					},
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
