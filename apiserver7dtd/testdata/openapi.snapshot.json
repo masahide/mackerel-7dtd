@@ -1,0 +1,611 @@
+{
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "details": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "ExecResult": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer"
+          },
+          "exitCode": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "exitCode",
+          "output",
+          "startedAt",
+          "finishedAt",
+          "durationMs"
+        ],
+        "type": "object"
+      },
+      "OperationResult": {
+        "properties": {
+          "exec": {
+            "$ref": "#/components/schemas/ExecResult"
+          },
+          "note": {
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "exec"
+        ],
+        "type": "object"
+      },
+      "RestartOperationResult": {
+        "properties": {
+          "exec": {
+            "properties": {
+              "start": {
+                "$ref": "#/components/schemas/ExecResult"
+              },
+              "stop": {
+                "$ref": "#/components/schemas/ExecResult"
+              }
+            },
+            "required": [
+              "stop",
+              "start"
+            ],
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "restarted",
+              "restarting"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "exec"
+        ],
+        "type": "object"
+      },
+      "ServerStatus": {
+        "properties": {
+          "lastStartedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "pid": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "serviceName": {
+            "example": "7dtdserver",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "stopped",
+              "starting",
+              "running",
+              "stopping",
+              "failed",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "uptimeSeconds": {
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "serviceName",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ServerSummary": {
+        "properties": {
+          "data": {
+            "properties": {
+              "hostiles": {
+                "items": {
+                  "$ref": "#/components/schemas/SummaryHostile"
+                },
+                "type": "array"
+              },
+              "players": {
+                "items": {
+                  "$ref": "#/components/schemas/SummaryPlayer"
+                },
+                "type": "array"
+              },
+              "stats": {
+                "properties": {
+                  "animals": {
+                    "nullable": true,
+                    "type": "integer"
+                  },
+                  "gameTime": {
+                    "properties": {
+                      "days": {
+                        "type": "integer"
+                      },
+                      "hours": {
+                        "type": "integer"
+                      },
+                      "minutes": {
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "hostiles": {
+                    "type": "integer"
+                  },
+                  "playersOnline": {
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "status": {
+                "$ref": "#/components/schemas/ServerStatus"
+              }
+            },
+            "type": "object"
+          },
+          "meta": {
+            "properties": {
+              "partial": {
+                "type": "boolean"
+              },
+              "serverTime": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "sources": {
+                "items": {
+                  "properties": {
+                    "error": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "latencyMs": {
+                      "nullable": true,
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "SummaryHostile": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SummaryPlayer": {
+        "properties": {
+          "banned": {
+            "nullable": true,
+            "properties": {
+              "banActive": {
+                "type": "boolean"
+              },
+              "reason": {
+                "nullable": true,
+                "type": "string"
+              },
+              "until": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "crossplatformId": {
+            "properties": {
+              "combinedString": {
+                "type": "string"
+              },
+              "platformId": {
+                "type": "string"
+              },
+              "userId": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "deaths": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "entityId": {
+            "type": "integer"
+          },
+          "health": {
+            "nullable": true,
+            "type": "number"
+          },
+          "ip": {
+            "nullable": true,
+            "type": "string"
+          },
+          "kills": {
+            "nullable": true,
+            "properties": {
+              "players": {
+                "type": "integer"
+              },
+              "zombies": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "level": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "ping": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "platformId": {
+            "properties": {
+              "combinedString": {
+                "type": "string"
+              },
+              "platformId": {
+                "type": "string"
+              },
+              "userId": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "position": {
+            "nullable": true,
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "score": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "stamina": {
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "7 Days to Die サーバーを docker compose で操作する同期API",
+    "title": "7dtd Ops API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "ok": {
+                      "example": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "ok"
+          }
+        },
+        "summary": "ヘルスチェック"
+      }
+    },
+    "/server/restart": {
+      "post": {
+        "operationId": "restartServer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestartOperationResult"
+                }
+              }
+            },
+            "description": "実行結果"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "競合"
+          }
+        },
+        "summary": "サーバー再起動（同期）"
+      }
+    },
+    "/server/start": {
+      "post": {
+        "operationId": "startServer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            },
+            "description": "実行結果"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "競合"
+          }
+        },
+        "summary": "サーバー起動（同期）"
+      }
+    },
+    "/server/status": {
+      "get": {
+        "operationId": "getServerStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerStatus"
+                }
+              }
+            },
+            "description": "現在の状態"
+          }
+        },
+        "summary": "サーバー稼働状態の取得"
+      }
+    },
+    "/server/stop": {
+      "post": {
+        "operationId": "stopServer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            },
+            "description": "実行結果"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "競合"
+          }
+        },
+        "summary": "サーバー停止（同期）"
+      }
+    },
+    "/server/summary": {
+      "get": {
+        "operationId": "getServerSummary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "includePositions",
+            "schema": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "maskIPs",
+            "schema": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limitHostiles",
+            "schema": {
+              "default": 200,
+              "maximum": 2000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeoutSeconds",
+            "schema": {
+              "maximum": 15,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "verbose",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerSummary"
+                }
+              }
+            },
+            "description": "サマリー取得成功（部分成功を含む）"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "下位ソース全滅により取得不可"
+          }
+        },
+        "summary": "現在サーバー情報を一括取得"
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://example.invalid"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download deps
+        run: go mod download
+
+      - name: Install oapi-codegen
+        run: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.0
+
+      - name: Generate OpenAPI types
+        run: cd apiserver7dtd; go generate ./...
+
+      - name: Check generated files are up to date
+        run: |
+          gcd apiserver7dtd; it diff --name-only --exit-code || \
+          (echo "::error::Generated files differ. Run 'go generate ./...' and commit." && exit 1)
+
+      - name: Run unit tests
+        run: cd apiserver7dtd; go test ./...
+
+      # （任意だが便利）スナップショット専用テストだけ先に走らせる
+      - name: OpenAPI snapshot test (served spec validation)
+        run: cd apiserver7dtd; go test -run TestOpenAPISnapshot ./...
