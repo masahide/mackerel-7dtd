@@ -35,13 +35,6 @@ func (f *fakeRunner) Run(_ context.Context, command string) (ExecResult, error) 
 	return res, f.err
 }
 
-func withRunner(r CommandRunner, fn func()) {
-	prev := cmdRunner
-	cmdRunner = r
-	defer func() { cmdRunner = prev }()
-	fn()
-}
-
 // ---- ヘルパ ----
 
 func do(ts *httptest.Server, method, path string, body []byte) (*http.Response, map[string]any, error) {
