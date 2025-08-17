@@ -145,21 +145,23 @@ type Config struct {
 	StatusCmd          string `envconfig:"STATUS_CMD" default:"ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml ps"`
 	ComposeServiceName string `envconfig:"COMPOSE_SERVICE" default:"7dtdserver"`
 
-	APIBaseURL string `envconfig:"SDTD_API_BASE"  default:"http://127.0.0.1:8088/api"`
-	APIUser    string `envconfig:"SDTD_API_USER"  default:""`
-	APISecret  string `envconfig:"SDTD_API_SECRET" default:""`
+	APIBaseURL string `envconfig:"API_BASE_URL"  default:"http://127.0.0.1:8088/api"`
+	APIUser    string `envconfig:"API_USER"  default:""`
+	APISecret  string `envconfig:"API_SECRET" default:""`
 }
 
 // グローバル設定（テスト互換のため維持）
 var appCfg = Config{
-	APIAddr:            ":8088",
-	ReadHeaderTimeout:  5 * time.Second,
-	GlobalTimeout:      30 * time.Second,
-	StartCmd:           "ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml up -d",
-	StopCmd:            "/usr/bin/systemctl stop 7dtd.service",
-	RestartCmd:         "/usr/bin/systemctl restart 7dtd.service",
-	StatusCmd:          "ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml ps",
-	ComposeServiceName: "7dtdserver",
+	/*
+		APIAddr:            ":8088",
+		ReadHeaderTimeout:  5 * time.Second,
+		GlobalTimeout:      30 * time.Second,
+		StartCmd:           "ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml up -d",
+		StopCmd:            "/usr/bin/systemctl stop 7dtd.service",
+		RestartCmd:         "/usr/bin/systemctl restart 7dtd.service",
+		StatusCmd:          "ssh 7dtd01 docker compose -f /home/masahide/work/7dtd/docker-compose.yml ps",
+		ComposeServiceName: "7dtdserver",
+	*/
 }
 
 // 環境変数から読み込む（prefix=OPSA）

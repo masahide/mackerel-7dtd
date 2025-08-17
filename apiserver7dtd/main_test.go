@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,8 +65,12 @@ func TestOpenAPIYAML_DeriveFromRequest(t *testing.T) {
 	defer resp.Body.Close()
 
 	var doc map[string]any
-	if err := yaml.NewDecoder(resp.Body).Decode(&doc); err != nil {
-		t.Fatalf("yaml decode: %v", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if err := yaml.NewDecoder(bytes.NewBuffer(body)).Decode(&doc); err != nil {
+		t.Fatalf("yaml decode: %v,body:%s", err, string(body))
 	}
 	servers, _ := doc["servers"].([]any)
 	if len(servers) != 1 {
