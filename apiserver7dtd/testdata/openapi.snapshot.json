@@ -385,11 +385,6 @@
       }
     },
     "securitySchemes": {
-      "ApiKeyAuth": {
-        "in": "header",
-        "name": "X-API-Key",
-        "type": "apiKey"
-      },
       "BearerAuth": {
         "scheme": "bearer",
         "type": "http"
@@ -606,9 +601,6 @@
   "security": [
     {
       "BearerAuth": []
-    },
-    {
-      "ApiKeyAuth": []
     }
   ],
   "servers": [
