@@ -34,7 +34,7 @@ jobs:
 
       - name: Check generated files are up to date
         run: |
-          gcd apiserver7dtd; it diff --name-only --exit-code || \
+          cd apiserver7dtd; git diff --name-only --exit-code || \
           (echo "::error::Generated files differ. Run 'go generate ./...' and commit." && exit 1)
 
       - name: Run unit tests
