@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -43,6 +44,11 @@ type Config struct {
 
 	// 全体のフェイルセーフ・タイムアウト（ミドルウェア）
 	GlobalTimeout time.Duration `envconfig:"GLOBAL_TIMEOUT" default:"30s"`
+
+	// 実行する Linux コマンド（sh -c で実行）
+	StartCmd   string `envconfig:"START_CMD" default:"/usr/bin/systemctl start 7dtd.service"`
+	StopCmd    string `envconfig:"STOP_CMD" default:"/usr/bin/systemctl stop 7dtd.service"`
+	RestartCmd string `envconfig:"RESTART_CMD" default:"/usr/bin/systemctl restart 7dtd.service"`
 }
 
 // グローバル設定（テスト互換のため維持）
@@ -50,6 +56,9 @@ var appCfg = Config{
 	APIAddr:           ":8080",
 	ReadHeaderTimeout: 5 * time.Second,
 	GlobalTimeout:     30 * time.Second,
+	StartCmd:          "/usr/bin/systemctl start 7dtd.service",
+	StopCmd:           "/usr/bin/systemctl stop 7dtd.service",
+	RestartCmd:        "/usr/bin/systemctl restart 7dtd.service",
 }
 
 // 環境変数から読み込む（prefix=OPSA）
@@ -111,6 +120,49 @@ func timeoutMW(d time.Duration) Middleware {
 }
 
 // =====================
+/* コマンド実行ランナー（テスト差し替え可能） */
+// =====================
+
+type ExecResult struct {
+	Command    string    `json:"command"`
+	ExitCode   int       `json:"exitCode"`
+	Output     string    `json:"output"`
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt"`
+	DurationMs int64     `json:"durationMs"`
+}
+
+type CommandRunner interface {
+	Run(ctx context.Context, command string) (ExecResult, error)
+}
+
+// 既定ランナー：sh -c で実行し CombinedOutput（stdout+stderr）を返す
+type ShellRunner struct{}
+
+func (ShellRunner) Run(ctx context.Context, command string) (ExecResult, error) {
+	res := ExecResult{
+		Command:   command,
+		StartedAt: time.Now(),
+	}
+	defer func() {
+		res.FinishedAt = time.Now()
+		res.DurationMs = res.FinishedAt.Sub(res.StartedAt).Milliseconds()
+	}()
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	out, err := cmd.CombinedOutput() // ← 2>&1 相当（結合出力）
+	res.Output = string(out)
+	if cmd.ProcessState != nil {
+		res.ExitCode = cmd.ProcessState.ExitCode()
+	} else {
+		res.ExitCode = -1
+	}
+	return res, err
+}
+
+// グローバルに差し替え可能（テストで fake に入れ替える）
+var cmdRunner CommandRunner = ShellRunner{}
+
+// =====================
 // 共通ヘルパー
 // =====================
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -150,28 +202,43 @@ func qInt(r *http.Request, key string, def, min, max int) (int, error) {
 }
 
 // =====================
-// ドメイン層のダミー
+// ドメイン層（ダミー＋コマンド実行）
 // =====================
+
 type ServerStatus struct {
 	Running     bool   `json:"running"`
 	CurrentJob  string `json:"currentJob,omitempty"`
 	PlayerCount int    `json:"playerCount"`
 }
 
-func startServer(ctx context.Context) error   { return nil }
-func stopServer(ctx context.Context) error    { return nil }
-func restartServer(ctx context.Context) error { return nil }
+func startServer(ctx context.Context) (ExecResult, error) {
+	return cmdRunner.Run(ctx, appCfg.StartCmd)
+}
+func stopServer(ctx context.Context) (ExecResult, error) {
+	return cmdRunner.Run(ctx, appCfg.StopCmd)
+}
+func restartServer(ctx context.Context) (ExecResult, error) {
+	return cmdRunner.Run(ctx, appCfg.RestartCmd)
+}
+
 func getStatus(ctx context.Context) ServerStatus {
 	return ServerStatus{Running: true, CurrentJob: "job-123", PlayerCount: 12}
 }
 func getJob(ctx context.Context, id string) (any, int) {
-	// return payload, httpStatus
 	if id == "notfound" {
 		return map[string]any{"error": map[string]any{"code": "NOT_FOUND", "message": "job not found"}}, http.StatusNotFound
 	}
-	// 仕様上は Job スキーマが必要だが、ここはサンプルなので簡略
 	return map[string]string{"id": id, "state": "done"}, http.StatusOK
 }
+
+type summaryOpts struct {
+	MaskIPs          bool
+	IncludePositions bool
+	LimitHostiles    int
+	TimeoutSeconds   int
+	Verbose          bool
+}
+
 func getSummary(ctx context.Context, opt summaryOpts) any {
 	return map[string]any{
 		"maskIPs":          opt.MaskIPs,
@@ -183,19 +250,11 @@ func getSummary(ctx context.Context, opt summaryOpts) any {
 	}
 }
 
-type summaryOpts struct {
-	MaskIPs          bool
-	IncludePositions bool
-	LimitHostiles    int
-	TimeoutSeconds   int
-	Verbose          bool
-}
-
 // =====================
 // ハンドラ実装
 // =====================
+
 func health(w http.ResponseWriter, r *http.Request) {
-	// OpenAPI に合わせて {"ok": true}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -205,28 +264,57 @@ func serverStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func serverStart(w http.ResponseWriter, r *http.Request) {
-	if err := startServer(r.Context()); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "CONFLICT", "message": err.Error()}})
+	res, err := startServer(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]any{
+				"code":    "COMMAND_FAILED",
+				"message": err.Error(),
+				"details": map[string]any{"exec": res},
+			},
+		})
 		return
 	}
-	// 本来は 202 + Job を返す（ここは簡略サンプル）
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "starting"})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "starting",
+		"exec":   res,
+	})
 }
 
 func serverStop(w http.ResponseWriter, r *http.Request) {
-	if err := stopServer(r.Context()); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "CONFLICT", "message": err.Error()}})
+	res, err := stopServer(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]any{
+				"code":    "COMMAND_FAILED",
+				"message": err.Error(),
+				"details": map[string]any{"exec": res},
+			},
+		})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "stopping",
+		"exec":   res,
+	})
 }
 
 func serverRestart(w http.ResponseWriter, r *http.Request) {
-	if err := restartServer(r.Context()); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "CONFLICT", "message": err.Error()}})
+	res, err := restartServer(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]any{
+				"code":    "COMMAND_FAILED",
+				"message": err.Error(),
+				"details": map[string]any{"exec": res},
+			},
+		})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "restarting",
+		"exec":   res,
+	})
 }
 
 func jobByID(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +358,6 @@ func serverSummary(w http.ResponseWriter, r *http.Request) {
 		Verbose:          verbose,
 	}
 
-	// オプションのタイムアウトを適用（業務処理が重い場合）
 	ctx := r.Context()
 	if timeoutSec > 0 {
 		var cancel context.CancelFunc
@@ -294,7 +381,6 @@ func routes() http.Handler {
 func buildRoutes(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 
-	// メソッド＋パスのパターン（Go1.22+）
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /server/status", serverStatus)
 	mux.HandleFunc("POST /server/start", serverStart)
@@ -309,7 +395,7 @@ func buildRoutes(cfg Config) http.Handler {
 	return chain(mux,
 		recoverMW,
 		logMW,
-		timeoutMW(cfg.GlobalTimeout), // 全体のフェイルセーフ
+		timeoutMW(cfg.GlobalTimeout),
 	)
 }
 
@@ -321,13 +407,11 @@ func openapiYAMLHandler(cfg Config) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("openapi not found: %v", err), http.StatusInternalServerError)
 			return
 		}
-		// YAML -> map に一旦落とす
 		var doc map[string]any
 		if err := yaml.Unmarshal(b, &doc); err != nil {
 			http.Error(w, fmt.Sprintf("openapi yaml parse error: %v", err), http.StatusInternalServerError)
 			return
 		}
-		// servers を決定
 		srvs := resolveOpenAPIServersFromCfg(cfg, r)
 		servers := make([]map[string]any, 0, len(srvs))
 		for _, u := range srvs {
@@ -339,7 +423,6 @@ func openapiYAMLHandler(cfg Config) http.HandlerFunc {
 		if len(servers) > 0 {
 			doc["servers"] = servers
 		}
-		// 再度 YAML 化して返す
 		out, err := yaml.Marshal(doc)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("openapi yaml marshal error: %v", err), http.StatusInternalServerError)
@@ -352,7 +435,6 @@ func openapiYAMLHandler(cfg Config) http.HandlerFunc {
 }
 
 func resolveOpenAPIServersFromCfg(cfg Config, r *http.Request) []string {
-	// 1) 明示指定（カンマ区切り → envconfig は自動で []string 化）
 	if len(cfg.OpenAPIServers) > 0 {
 		var out []string
 		for _, s := range cfg.OpenAPIServers {
@@ -365,11 +447,9 @@ func resolveOpenAPIServersFromCfg(cfg Config, r *http.Request) []string {
 			return out
 		}
 	}
-	// 2) PublicBaseURL
 	if strings.TrimSpace(cfg.PublicBaseURL) != "" {
 		return []string{strings.TrimSpace(cfg.PublicBaseURL)}
 	}
-	// 3) リクエストから推定
 	scheme := "http"
 	if xf := r.Header.Get("X-Forwarded-Proto"); xf != "" {
 		scheme = xf
