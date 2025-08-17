@@ -382,7 +382,7 @@ func serverLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// tail -n は呼び出し側で付与する
-	cmd := fmt.Sprintf("%s | tail -n %d'", strings.TrimLeft(appCfg.LogsCmd, "'"), lines)
+	cmd := fmt.Sprintf("%s | tail -n %d'", strings.TrimRight(appCfg.LogsCmd, "'"), lines)
 	res, runErr := cmdRunner.Run(r.Context(), cmd)
 	if runErr != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{
