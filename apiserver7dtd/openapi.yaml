@@ -1,0 +1,379 @@
+openapi: 3.0.3
+info:
+  title: 7dtd Ops API
+  version: "0.1.0"
+  description: >
+    Linux上の 7 Days to Die サーバー（systemd 管理）を操作するAPI。
+    稼働状態取得・起動・停止・再起動を提供。操作は非同期ジョブで実行。
+servers:
+  - url: https://ops.example.com
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: ヘルスチェック
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+
+  /server/status:
+    get:
+      operationId: getServerStatus
+      summary: サーバー稼働状態の取得
+      responses:
+        "200":
+          description: 現在の状態
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerStatus"
+
+  /server/start:
+    post:
+      operationId: startServer
+      summary: サーバー起動（非同期）
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRequest"
+      responses:
+        "202":
+          description: 受け付け（ジョブ発行）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "409":
+          description: 競合
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /server/stop:
+    post:
+      operationId: stopServer
+      summary: サーバー停止（非同期）
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopRequest"
+      responses:
+        "202":
+          description: 受け付け（ジョブ発行）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "409":
+          description: 競合
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /server/restart:
+    post:
+      operationId: restartServer
+      summary: サーバー再起動（非同期）
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestartRequest"
+      responses:
+        "202":
+          description: 受け付け（ジョブ発行）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "409":
+          description: 競合
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      summary: ジョブの状態取得
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ジョブ詳細
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: 見つからない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /server/summary:
+    get:
+      operationId: getServerSummary
+      summary: 現在サーバー情報（状態・統計・プレイヤー・敵）を一括取得
+      parameters:
+        - name: includePositions
+          in: query
+          schema: { type: boolean, default: true }
+        - name: maskIPs
+          in: query
+          schema: { type: boolean, default: true }
+        - name: limitHostiles
+          in: query
+          schema: { type: integer, default: 200, minimum: 0, maximum: 2000 }
+        - name: timeoutSeconds
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 15 }
+        - name: verbose
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: サマリー取得成功（部分成功を含む）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerSummary"
+        "502":
+          description: 下位ソース全滅により取得不可
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 同一操作の重複防止用キー（UUID推奨）
+      schema: { type: string, maxLength: 64 }
+
+  schemas:
+    ServerStatus:
+      type: object
+      required: [serviceName, state]
+      properties:
+        serviceName:
+          type: string
+          example: "7dtd.service"
+        state:
+          type: string
+          enum: [stopped, starting, running, stopping, failed, unknown]
+        pid:
+          type: integer
+          nullable: true
+          example: 12345
+        uptimeSeconds:
+          type: integer
+          nullable: true
+          example: 86400
+        lastStartedAt:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
+          description: 補足（systemdのメッセージなど）
+
+    StartRequest:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 200 }
+        dryRun: { type: boolean, default: false }
+        timeoutSeconds: { type: integer, minimum: 10, maximum: 600, default: 120 }
+
+    StopRequest:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 200 }
+        force:
+          type: boolean
+          default: false
+          description: "true の場合は強制停止（kill）を許可（ポリシーで無効化可）"
+        timeoutSeconds: { type: integer, minimum: 10, maximum: 600, default: 120 }
+
+    RestartRequest:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 200 }
+        timeoutSeconds: { type: integer, minimum: 10, maximum: 600, default: 180 }
+
+    Job:
+      type: object
+      required: [id, type, status, submittedAt]
+      properties:
+        id: { type: string, example: "5e3c7f2d-7e7c-4c1b-9f7a-8f1aa7b3a0cd" }
+        type:
+          type: string
+          enum: [start, stop, restart, statusCheck]
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, timed_out, cancelled]
+        submittedAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time, nullable: true }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        request:
+          type: object
+          additionalProperties: true
+        result:
+          $ref: "#/components/schemas/ServerStatus"
+          nullable: true
+        error:
+          type: object
+          nullable: true
+          properties:
+            code: { type: string, example: "EXECUTION_FAILED" }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    ServerSummary:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          properties:
+            status:
+              $ref: "#/components/schemas/ServerStatus"
+            stats:
+              type: object
+              properties:
+                gameTime:
+                  type: object
+                  properties:
+                    days: { type: integer }
+                    hours: { type: integer }
+                    minutes: { type: integer }
+                playersOnline: { type: integer }
+                hostiles: { type: integer }
+                animals: { type: integer, nullable: true }
+            players:
+              type: array
+              items:
+                $ref: "#/components/schemas/SummaryPlayer"
+            hostiles:
+              type: array
+              items:
+                $ref: "#/components/schemas/SummaryHostile"
+        meta:
+          type: object
+          properties:
+            serverTime: { type: string, format: date-time }
+            partial: { type: boolean, description: "一部ソース失敗時 true" }
+            sources:
+              type: array
+              description: "verbose=true のとき詳細"
+              items:
+                type: object
+                properties:
+                  name: { type: string, example: "serverstats" }
+                  ok: { type: boolean }
+                  latencyMs: { type: integer, nullable: true }
+                  error: { type: string, nullable: true }
+
+    SummaryPlayer:
+      type: object
+      properties:
+        entityId: { type: integer }
+        name: { type: string }
+        platformId:
+          type: object
+          properties:
+            platformId: { type: string, example: "Steam" }
+            userId: { type: string }
+            combinedString: { type: string }
+        crossplatformId:
+          type: object
+          properties:
+            platformId: { type: string, example: "EOS" }
+            userId: { type: string }
+            combinedString: { type: string }
+        online: { type: boolean }
+        ip: { type: string, nullable: true, description: "maskIPs=true の場合はマスクされる" }
+        ping: { type: integer, nullable: true }
+        position:
+          type: object
+          nullable: true
+          properties:
+            x: { type: number }
+            y: { type: number }
+            z: { type: number }
+        level: { type: integer, nullable: true }
+        health: { type: number, nullable: true }
+        stamina: { type: number, nullable: true }
+        score: { type: integer, nullable: true }
+        deaths: { type: integer, nullable: true }
+        kills:
+          type: object
+          nullable: true
+          properties:
+            zombies: { type: integer }
+            players: { type: integer }
+        banned:
+          type: object
+          nullable: true
+          properties:
+            banActive: { type: boolean }
+            reason: { type: string, nullable: true }
+            until: { type: string, format: date-time, nullable: true }
+
+    SummaryHostile:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        position:
+          type: object
+          properties:
+            x: { type: number }
+            y: { type: number }
+            z: { type: number }
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
