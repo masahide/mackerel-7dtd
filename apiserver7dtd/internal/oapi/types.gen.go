@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	ApiKeyAuthScopes = "ApiKeyAuth.Scopes"
 	BearerAuthScopes = "BearerAuth.Scopes"
 )
 
