@@ -215,6 +215,9 @@ func (w *respWriter) WriteHeader(code int) {
 }
 
 func timeoutMW(d time.Duration) Middleware {
+	if d <= 0 {
+		return func(next http.Handler) http.Handler { return next }
+	}
 	return func(next http.Handler) http.Handler {
 		return http.TimeoutHandler(next, d, http.StatusText(http.StatusGatewayTimeout))
 	}
