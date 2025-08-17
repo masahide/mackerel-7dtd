@@ -66,8 +66,8 @@ func TestServerStart_ReturnsExecResult(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != http.StatusAccepted {
-			t.Fatalf("status want 202 got %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status want 200 got %d", resp.StatusCode)
 		}
 		exec := m["exec"].(map[string]any)
 		if exec["exitCode"].(float64) != 0 {

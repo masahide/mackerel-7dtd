@@ -1,15 +1,12 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: 7dtd Ops API
   version: "0.1.0"
-  description: >
-    Linux上の 7 Days to Die サーバー（systemd 管理）を操作するAPI。
-    稼働状態取得・起動・停止・再起動を提供。操作は非同期ジョブで実行。
+  description: 7 Days to Die サーバーを docker compose で操作する同期API
 servers:
   - url: https://ops.example.com
 security:
   - BearerAuth: []
-
 paths:
   /health:
     get:
@@ -23,8 +20,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean, example: true }
-
+                  ok:
+                    type: boolean
+                    example: true
   /server/status:
     get:
       operationId: getServerStatus
@@ -36,103 +34,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServerStatus"
-
   /server/start:
     post:
       operationId: startServer
-      summary: サーバー起動（非同期）
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StartRequest"
+      summary: サーバー起動（同期）
       responses:
-        "202":
-          description: 受け付け（ジョブ発行）
+        "200":
+          description: 実行結果
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Job"
+                $ref: "#/components/schemas/OperationResult"
         "409":
           description: 競合
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-
   /server/stop:
     post:
       operationId: stopServer
-      summary: サーバー停止（非同期）
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StopRequest"
+      summary: サーバー停止（同期）
       responses:
-        "202":
-          description: 受け付け（ジョブ発行）
+        "200":
+          description: 実行結果
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Job"
+                $ref: "#/components/schemas/OperationResult"
         "409":
           description: 競合
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-
   /server/restart:
     post:
       operationId: restartServer
-      summary: サーバー再起動（非同期）
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RestartRequest"
-      responses:
-        "202":
-          description: 受け付け（ジョブ発行）
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Job"
-        "409":
-          description: 競合
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
-  /jobs/{id}:
-    get:
-      operationId: getJob
-      summary: ジョブの状態取得
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
+      summary: サーバー再起動（同期）
       responses:
         "200":
-          description: ジョブ詳細
+          description: 実行結果
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Job"
-        "404":
-          description: 見つからない
+                $ref: "#/components/schemas/RestartOperationResult"
+        "409":
+          description: 競合
           content:
             application/json:
               schema:
@@ -140,7 +88,7 @@ paths:
   /server/summary:
     get:
       operationId: getServerSummary
-      summary: 現在サーバー情報（状態・統計・プレイヤー・敵）を一括取得
+      summary: 現在サーバー情報を一括取得
       parameters:
         - name: includePositions
           in: query
@@ -170,21 +118,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
-
-  parameters:
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      description: 同一操作の重複防止用キー（UUID推奨）
-      schema: { type: string, maxLength: 64 }
-
   schemas:
     ServerStatus:
       type: object
@@ -192,77 +130,56 @@ components:
       properties:
         serviceName:
           type: string
-          example: "7dtd.service"
+          example: "7dtdserver"
         state:
           type: string
           enum: [stopped, starting, running, stopping, failed, unknown]
         pid:
           type: integer
           nullable: true
-          example: 12345
         uptimeSeconds:
           type: integer
           nullable: true
-          example: 86400
         lastStartedAt:
           type: string
           format: date-time
           nullable: true
         notes:
           type: string
-          description: 補足（systemdのメッセージなど）
-
-    StartRequest:
+    ExecResult:
       type: object
+      required: [command, exitCode, output, startedAt, finishedAt, durationMs]
       properties:
-        reason: { type: string, maxLength: 200 }
-        dryRun: { type: boolean, default: false }
-        timeoutSeconds: { type: integer, minimum: 10, maximum: 600, default: 120 }
-
-    StopRequest:
+        command: { type: string }
+        exitCode: { type: integer }
+        output: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        durationMs: { type: integer }
+    OperationResult:
       type: object
+      required: [status, exec]
       properties:
-        reason: { type: string, maxLength: 200 }
-        force:
-          type: boolean
-          default: false
-          description: "true の場合は強制停止（kill）を許可（ポリシーで無効化可）"
-        timeoutSeconds: { type: integer, minimum: 10, maximum: 600, default: 120 }
-
-    RestartRequest:
-      type: object
-      properties:
-        reason: { type: string, maxLength: 200 }
-        timeoutSeconds: { type: integer, minimum: 10, maximum: 600, default: 180 }
-
-    Job:
-      type: object
-      required: [id, type, status, submittedAt]
-      properties:
-        id: { type: string, example: "5e3c7f2d-7e7c-4c1b-9f7a-8f1aa7b3a0cd" }
-        type:
-          type: string
-          enum: [start, stop, restart, statusCheck]
         status:
           type: string
-          enum: [queued, running, succeeded, failed, timed_out, cancelled]
-        submittedAt: { type: string, format: date-time }
-        startedAt: { type: string, format: date-time, nullable: true }
-        finishedAt: { type: string, format: date-time, nullable: true }
-        request:
-          type: object
-          additionalProperties: true
-        result:
-          $ref: "#/components/schemas/ServerStatus"
+        note:
+          type: string
           nullable: true
-        error:
+        exec:
+          $ref: "#/components/schemas/ExecResult"
+    RestartOperationResult:
+      type: object
+      required: [status, exec]
+      properties:
+        status:
+          type: string
+          enum: [restarted, restarting]
+        exec:
           type: object
-          nullable: true
+          required: [stop, start]
           properties:
-            code: { type: string, example: "EXECUTION_FAILED" }
-            message: { type: string }
-            details: { type: object, additionalProperties: true }
-
+            stop: { $ref: "#/components/schemas/ExecResult" }
+            start: { $ref: "#/components/schemas/ExecResult" }
     ServerSummary:
       type: object
       required: [data, meta]
@@ -296,18 +213,16 @@ components:
           type: object
           properties:
             serverTime: { type: string, format: date-time }
-            partial: { type: boolean, description: "一部ソース失敗時 true" }
+            partial: { type: boolean }
             sources:
               type: array
-              description: "verbose=true のとき詳細"
               items:
                 type: object
                 properties:
-                  name: { type: string, example: "serverstats" }
+                  name: { type: string }
                   ok: { type: boolean }
                   latencyMs: { type: integer, nullable: true }
                   error: { type: string, nullable: true }
-
     SummaryPlayer:
       type: object
       properties:
@@ -316,17 +231,17 @@ components:
         platformId:
           type: object
           properties:
-            platformId: { type: string, example: "Steam" }
+            platformId: { type: string }
             userId: { type: string }
             combinedString: { type: string }
         crossplatformId:
           type: object
           properties:
-            platformId: { type: string, example: "EOS" }
+            platformId: { type: string }
             userId: { type: string }
             combinedString: { type: string }
         online: { type: boolean }
-        ip: { type: string, nullable: true, description: "maskIPs=true の場合はマスクされる" }
+        ip: { type: string, nullable: true }
         ping: { type: integer, nullable: true }
         position:
           type: object
@@ -353,7 +268,6 @@ components:
             banActive: { type: boolean }
             reason: { type: string, nullable: true }
             until: { type: string, format: date-time, nullable: true }
-
     SummaryHostile:
       type: object
       properties:
@@ -365,7 +279,6 @@ components:
             x: { type: number }
             y: { type: number }
             z: { type: number }
-
     ErrorResponse:
       type: object
       required: [error]

@@ -612,13 +612,13 @@ func serverStart(w http.ResponseWriter, r *http.Request) {
 	}
 	st, note := detectStartStatus(res.Output)
 	payload := map[string]any{
-		"status": st, // "started" | "already_running" | "starting"
+		"status": st,
 		"exec":   res,
 	}
 	if note != "" {
 		payload["note"] = note
 	}
-	writeJSON(w, http.StatusAccepted, payload)
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func serverStop(w http.ResponseWriter, r *http.Request) {
@@ -635,13 +635,13 @@ func serverStop(w http.ResponseWriter, r *http.Request) {
 	}
 	st, note := detectStopStatus(res.Output)
 	payload := map[string]any{
-		"status": st, // "stopped" | "already_stopped" | "stopping"
+		"status": st,
 		"exec":   res,
 	}
 	if note != "" {
 		payload["note"] = note
 	}
-	writeJSON(w, http.StatusAccepted, payload)
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func serverRestart(w http.ResponseWriter, r *http.Request) {
@@ -659,14 +659,13 @@ func serverRestart(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// down + up の合成から、おおまかに "restarted" と判定（up 側だけで十分）
 	startStatus, _ := detectStartStatus(res.Start.Output)
 	status := "restarted"
 	if startStatus == "starting" {
 		status = "restarting"
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status": status, // "restarted" or "restarting"
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": status,
 		"exec": map[string]any{
 			"stop":  res.Stop,
 			"start": res.Start,

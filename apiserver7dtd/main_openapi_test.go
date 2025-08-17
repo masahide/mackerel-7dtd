@@ -133,28 +133,6 @@ func TestOpenAPI_Health(t *testing.T) {
 	_ = json.Valid(body)
 }
 
-func TestOpenAPI_JobByID(t *testing.T) {
-	ts := newTestServer()
-	defer ts.Close()
-
-	_, rt := loadOpenAPISpecWithServer(t, ts.URL)
-
-	// 200
-	{
-		req, resp, body := doReq(t, ts, http.MethodGet, "/jobs/abc123", nil, nil)
-		if err := validateResponseWithOpenAPI(t, rt, req, resp, body); err != nil {
-			t.Errorf("/jobs/{id} 200 not conforming: %v", err)
-		}
-	}
-	// 404（ErrorResponse スキーマが要求されます）
-	{
-		req, resp, body := doReq(t, ts, http.MethodGet, "/jobs/notfound", nil, nil)
-		if err := validateResponseWithOpenAPI(t, rt, req, resp, body); err != nil {
-			t.Errorf("/jobs/{id} 404 not conforming: %v", err)
-		}
-	}
-}
-
 /********** ヘルパ **********/
 type composeFakeRunner struct {
 	out   string
@@ -306,8 +284,8 @@ it to avoid potential confusion"
 		// --- start (fresh) ---
 		{
 			resp, m := doJSON(t, ts, http.MethodPost, "/server/start", []byte(`{}`))
-			if resp.StatusCode != http.StatusAccepted {
-				t.Fatalf("start: want 202 got %d", resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("start: want 200 got %d", resp.StatusCode)
 			}
 			if s := m["status"].(string); s != "started" {
 				t.Fatalf("start: status want started got %q (body=%v)", s, m)
@@ -321,8 +299,8 @@ it to avoid potential confusion"
 		// --- stop (fresh) ---
 		{
 			resp, m := doJSON(t, ts, http.MethodPost, "/server/stop", []byte(`{}`))
-			if resp.StatusCode != http.StatusAccepted {
-				t.Fatalf("stop: want 202 got %d", resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("stop: want 200 got %d", resp.StatusCode)
 			}
 			if s := m["status"].(string); s != "stopped" {
 				t.Fatalf("stop: status want stopped got %q (body=%v)", s, m)
@@ -336,8 +314,8 @@ it to avoid potential confusion"
 		// --- restart (down already + up already running) ---
 		{
 			resp, m := doJSON(t, ts, http.MethodPost, "/server/restart", []byte(`{}`))
-			if resp.StatusCode != http.StatusAccepted {
-				t.Fatalf("restart: want 202 got %d", resp.StatusCode)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("restart: want 200 got %d", resp.StatusCode)
 			}
 			if s := m["status"].(string); s != "restarted" && s != "restarting" {
 				t.Fatalf("restart: status want restarted/restarting got %q (body=%v)", s, m)
