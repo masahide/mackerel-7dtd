@@ -524,11 +524,11 @@ func buildRoutes(cfg Config) http.Handler {
 
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /server/status", serverStatus)
-	mux.HandleFunc("GET /server/summary", serverSummaryHandler(cfg))
-	mux.HandleFunc("GET /server/logs", serverLogs)
-	mux.HandleFunc("POST /server/start", serverStart)
-	mux.HandleFunc("POST /server/stop", serverStop)
-	mux.HandleFunc("POST /server/restart", serverRestart)
+    mux.HandleFunc("GET /server/summary", serverSummaryHandler(cfg))
+    mux.HandleFunc("GET /server/logs", serverLogs)
+    mux.HandleFunc("GET /server/start", serverStart)
+    mux.HandleFunc("GET /server/stop", serverStop)
+    mux.HandleFunc("GET /server/restart", serverRestart)
 
 	// OpenAPI の配信：servers を cfg / リクエストから解決して上書き
 	mux.HandleFunc("GET /docs/openapi.yaml", openapiYAMLHandler(cfg))

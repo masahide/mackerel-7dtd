@@ -35,7 +35,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ServerStatus"
   /server/start:
-    post:
+    get:
       operationId: startServer
       summary: サーバー起動（同期）
       responses:
@@ -52,7 +52,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
   /server/stop:
-    post:
+    get:
       operationId: stopServer
       summary: サーバー停止（同期）
       responses:
@@ -69,7 +69,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
   /server/restart:
-    post:
+    get:
       operationId: restartServer
       summary: サーバー再起動（同期）
       responses:

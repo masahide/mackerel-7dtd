@@ -494,7 +494,7 @@
       }
     },
     "/server/restart": {
-      "post": {
+      "get": {
         "operationId": "restartServer",
         "responses": {
           "200": {
@@ -522,7 +522,7 @@
       }
     },
     "/server/start": {
-      "post": {
+      "get": {
         "operationId": "startServer",
         "responses": {
           "200": {
@@ -568,7 +568,7 @@
       }
     },
     "/server/stop": {
-      "post": {
+      "get": {
         "operationId": "stopServer",
         "responses": {
           "200": {
