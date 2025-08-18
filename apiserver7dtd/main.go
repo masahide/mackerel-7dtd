@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"bytes"
 	"io"
 	"log"
 	"net/http"
@@ -256,6 +257,132 @@ type RestartOperationResult struct {
 	Exec   RestartExec `json:"exec"`
 }
 
+// --- Common/Error/Health DTOs ---
+type HealthResponse struct {
+	OK bool `json:"ok"`
+}
+
+type ErrorDetail struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+type ErrorResponse struct {
+	Error ErrorDetail `json:"error"`
+}
+
+// --- Logs DTOs (exec.output omitted as lines are returned in data) ---
+type ExecMeta struct {
+	Command    string    `json:"command"`
+	ExitCode   int       `json:"exitCode"`
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt"`
+	DurationMs int64     `json:"durationMs"`
+}
+type ServerLogsData struct {
+	Lines []string `json:"lines"`
+}
+type ServerLogsMeta struct {
+	Exec ExecMeta `json:"exec"`
+}
+type ServerLogsResponse struct {
+	Data ServerLogsData `json:"data"`
+	Meta ServerLogsMeta `json:"meta"`
+}
+
+// --- Summary DTOs ---
+type SummaryGameTime struct {
+	Days    int `json:"days"`
+	Hours   int `json:"hours"`
+	Minutes int `json:"minutes"`
+}
+type SummaryStats struct {
+	GameTime      SummaryGameTime `json:"gameTime"`
+	PlayersOnline int             `json:"playersOnline"`
+	Hostiles      int             `json:"hostiles"`
+	Animals       *int            `json:"animals"`
+}
+type SummaryPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+type SummaryID struct {
+	PlatformID     string `json:"platformId"`
+	UserID         string `json:"userId"`
+	CombinedString string `json:"combinedString"`
+}
+type SummaryKills struct {
+	Zombies *int `json:"zombies"`
+	Players *int `json:"players"`
+}
+type SummaryBanned struct {
+	BanActive bool    `json:"banActive"`
+	Reason    *string `json:"reason"`
+	Until     *string `json:"until"`
+}
+type SummaryPlayer struct {
+	EntityID        int              `json:"entityId"`
+	Name            string           `json:"name"`
+	PlatformID      *SummaryID       `json:"platformId,omitempty"`
+	CrossplatformID *SummaryID       `json:"crossplatformId,omitempty"`
+	Online          bool             `json:"online"`
+	IP              string           `json:"ip,omitempty"`
+	Ping            *int             `json:"ping,omitempty"`
+	Position        *SummaryPosition `json:"position,omitempty"`
+	Level           *int             `json:"level,omitempty"`
+	Health          *float64         `json:"health,omitempty"`
+	Stamina         *float64         `json:"stamina,omitempty"`
+	Score           *int             `json:"score,omitempty"`
+	Deaths          *int             `json:"deaths,omitempty"`
+	Kills           *SummaryKills    `json:"kills,omitempty"`
+	Banned          *SummaryBanned   `json:"banned,omitempty"`
+}
+type SummaryHostile struct {
+	ID       int              `json:"id"`
+	Name     string           `json:"name"`
+	Position *SummaryPosition `json:"position,omitempty"`
+}
+type SummarySource struct {
+	Name      string  `json:"name"`
+	OK        bool    `json:"ok"`
+	LatencyMs *int64  `json:"latencyMs,omitempty"`
+	Error     *string `json:"error,omitempty"`
+}
+type ServerSummaryData struct {
+	Status   ServerStatus     `json:"status"`
+	Stats    SummaryStats     `json:"stats"`
+	Players  []SummaryPlayer  `json:"players"`
+	Hostiles []SummaryHostile `json:"hostiles"`
+}
+type ServerSummaryMeta struct {
+	ServerTime string          `json:"serverTime"`
+	Partial    bool            `json:"partial"`
+	Sources    []SummarySource `json:"sources,omitempty"`
+}
+type ServerSummaryResponse struct {
+    Data ServerSummaryData `json:"data"`
+    Meta ServerSummaryMeta `json:"meta"`
+}
+
+// --- Command DTOs ---
+type CommandRequest struct {
+    Command        string  `json:"command"`
+    Parameters     *string `json:"parameters"`
+    TimeoutSeconds *int    `json:"timeoutSeconds"`
+}
+
+type CommandResponse struct {
+    Data struct {
+        Command    string  `json:"command"`
+        Parameters *string `json:"parameters"`
+        Result     string  `json:"result"`
+    } `json:"data"`
+    Meta struct {
+        ServerTime *string `json:"serverTime"`
+    } `json:"meta"`
+}
+
 type CommandRunner interface {
 	Run(ctx context.Context, command string) (ExecResult, error)
 }
@@ -361,7 +488,7 @@ func getStatus(ctx context.Context) ServerStatus {
 // =====================
 
 func health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, http.StatusOK, HealthResponse{OK: true})
 }
 
 func serverStatus(w http.ResponseWriter, r *http.Request) {
@@ -373,25 +500,14 @@ func serverStatus(w http.ResponseWriter, r *http.Request) {
 func serverLogs(w http.ResponseWriter, r *http.Request) {
 	lines, err := qInt(r, "lines", 20, 1, 2000)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": map[string]any{
-				"code":    "INVALID_PARAM",
-				"message": err.Error(),
-			},
-		})
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_PARAM", Message: err.Error()}})
 		return
 	}
 	// tail -n は呼び出し側で付与する
 	cmd := fmt.Sprintf("%s | tail -n %d'", strings.TrimRight(appCfg.LogsCmd, "'"), lines)
 	res, runErr := cmdRunner.Run(r.Context(), cmd)
 	if runErr != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{
-			"error": map[string]any{
-				"code":    "COMMAND_FAILED",
-				"message": runErr.Error(),
-				"details": map[string]any{"exec": res},
-			},
-		})
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: ErrorDetail{Code: "COMMAND_FAILED", Message: runErr.Error(), Details: map[string]any{"exec": res}}})
 		return
 	}
 	// 出力を行単位に分割
@@ -399,14 +515,18 @@ func serverLogs(w http.ResponseWriter, r *http.Request) {
 	if len(out) > 0 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"data": map[string]any{
-			"lines": out,
-		},
-		"meta": map[string]any{
-			"exec": res,
-		},
-	})
+	// meta.exec からは output を省略（data.lines に格納済みのため冗長）
+	resp := ServerLogsResponse{
+		Data: ServerLogsData{Lines: out},
+		Meta: ServerLogsMeta{Exec: ExecMeta{
+			Command:    res.Command,
+			ExitCode:   res.ExitCode,
+			StartedAt:  res.StartedAt,
+			FinishedAt: res.FinishedAt,
+			DurationMs: res.DurationMs,
+		}},
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // =====================
@@ -419,15 +539,16 @@ func routes() http.Handler {
 }
 
 func buildRoutes(cfg Config) http.Handler {
-	mux := http.NewServeMux()
+    mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /server/status", serverStatus)
-	mux.HandleFunc("GET /server/summary", serverSummaryHandler(cfg))
-	mux.HandleFunc("GET /server/logs", serverLogs)
-	mux.HandleFunc("POST /server/start", serverStart)
-	mux.HandleFunc("POST /server/stop", serverStop)
-	mux.HandleFunc("POST /server/restart", serverRestart)
+    mux.HandleFunc("GET /server/summary", serverSummaryHandler(cfg))
+    mux.HandleFunc("GET /server/logs", serverLogs)
+    mux.HandleFunc("GET /server/start", serverStart)
+    mux.HandleFunc("GET /server/stop", serverStop)
+    mux.HandleFunc("GET /server/restart", serverRestart)
+    mux.HandleFunc("GET /server/command", serverCommandHandler(cfg))
 
 	// OpenAPI の配信：servers を cfg / リクエストから解決して上書き
 	mux.HandleFunc("GET /docs/openapi.yaml", openapiYAMLHandler(cfg))
@@ -667,13 +788,7 @@ func restartServer(ctx context.Context) (RestartResult, error) {
 func serverStart(w http.ResponseWriter, r *http.Request) {
 	res, err := startServer(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": map[string]any{
-				"code":    "COMMAND_FAILED",
-				"message": err.Error(),
-				"details": map[string]any{"exec": res},
-			},
-		})
+		writeJSON(w, http.StatusConflict, ErrorResponse{Error: ErrorDetail{Code: "COMMAND_FAILED", Message: err.Error(), Details: map[string]any{"exec": res}}})
 		return
 	}
 	st, note := detectStartStatus(res.Output)
@@ -692,13 +807,7 @@ func serverStart(w http.ResponseWriter, r *http.Request) {
 func serverStop(w http.ResponseWriter, r *http.Request) {
 	res, err := stopServer(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": map[string]any{
-				"code":    "COMMAND_FAILED",
-				"message": err.Error(),
-				"details": map[string]any{"exec": res},
-			},
-		})
+		writeJSON(w, http.StatusConflict, ErrorResponse{Error: ErrorDetail{Code: "COMMAND_FAILED", Message: err.Error(), Details: map[string]any{"exec": res}}})
 		return
 	}
 	st, note := detectStopStatus(res.Output)
@@ -717,16 +826,7 @@ func serverStop(w http.ResponseWriter, r *http.Request) {
 func serverRestart(w http.ResponseWriter, r *http.Request) {
 	res, err := restartServer(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": map[string]any{
-				"code":    "COMMAND_FAILED",
-				"message": err.Error(),
-				"details": map[string]any{
-					"execStop":  res.Stop,
-					"execStart": res.Start,
-				},
-			},
-		})
+		writeJSON(w, http.StatusConflict, ErrorResponse{Error: ErrorDetail{Code: "COMMAND_FAILED", Message: err.Error(), Details: map[string]any{"execStop": res.Stop, "execStart": res.Start}}})
 		return
 	}
 	startStatus, _ := detectStartStatus(res.Start.Output)
@@ -769,6 +869,41 @@ func httpJSONGet(ctx context.Context, url, user, secret string, v any) (latencyM
 		return latency, fmt.Errorf("upstream %s status=%d body=%s", url, resp.StatusCode, string(b))
 	}
 	return latency, json.NewDecoder(resp.Body).Decode(v)
+}
+
+// --- 簡易HTTP POST（JSONボディ＋ヘッダ付き） ---
+func httpJSONPost(ctx context.Context, url, user, secret string, in any, v any) (latencyMs int64, _err error) {
+    bodyBytes, err := json.Marshal(in)
+    if err != nil {
+        return 0, err
+    }
+    req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+    if err != nil {
+        return 0, err
+    }
+    req.Header.Set("Content-Type", "application/json")
+    if user != "" {
+        req.Header.Set("X-SDTD-API-TOKENNAME", user)
+    }
+    if secret != "" {
+        req.Header.Set("X-SDTD-API-SECRET", secret)
+    }
+    client := &http.Client{}
+    start := time.Now()
+    resp, err := client.Do(req)
+    latency := time.Since(start).Milliseconds()
+    if err != nil {
+        return latency, err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+        b, _ := io.ReadAll(resp.Body)
+        return latency, fmt.Errorf("upstream %s status=%d body=%s", url, resp.StatusCode, string(b))
+    }
+    if v == nil {
+        return latency, nil
+    }
+    return latency, json.NewDecoder(resp.Body).Decode(v)
 }
 
 // --- IPマスク（例: 203.0.113.*） ---
@@ -880,15 +1015,11 @@ func serverSummaryHandler(cfg Config) http.HandlerFunc {
 		wg.Wait()
 
 		if !(pStats.OK || pPlayers.OK || pHostiles.OK) {
-			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"error": map[string]any{
-					"code":    "UPSTREAM_FAILED",
-					"message": "all upstream sources failed",
-					"details": map[string]any{
-						"sources": []sourceProbe{pStats, pPlayers, pHostiles},
-					},
-				},
-			})
+			writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: ErrorDetail{
+				Code:    "UPSTREAM_FAILED",
+				Message: "all upstream sources failed",
+				Details: map[string]any{"sources": []sourceProbe{pStats, pPlayers, pHostiles}},
+			}})
 			return
 		}
 
@@ -899,18 +1030,16 @@ func serverSummaryHandler(cfg Config) http.HandlerFunc {
 		if pStats.OK {
 			animalsPtr = stats.Data.Animals
 		}
-		statsObj := map[string]any{
-			"gameTime": map[string]any{
-				"days":    stats.Data.GameTime.Days,
-				"hours":   stats.Data.GameTime.Hours,
-				"minutes": stats.Data.GameTime.Minutes,
+		statsObj := SummaryStats{
+			GameTime: SummaryGameTime{
+				Days: stats.Data.GameTime.Days, Hours: stats.Data.GameTime.Hours, Minutes: stats.Data.GameTime.Minutes,
 			},
-			"playersOnline": stats.Data.Players,
-			"hostiles":      stats.Data.Hostiles,
-			"animals":       animalsPtr,
+			PlayersOnline: stats.Data.Players,
+			Hostiles:      stats.Data.Hostiles,
+			Animals:       animalsPtr,
 		}
 
-		outPlayers := make([]map[string]any, 0, len(players.Data.Players))
+		outPlayers := make([]SummaryPlayer, 0, len(players.Data.Players))
 		if pPlayers.OK {
 			for _, p := range players.Data.Players {
 				ip := p.IP
@@ -918,58 +1047,59 @@ func serverSummaryHandler(cfg Config) http.HandlerFunc {
 					ip = maskIP(ip)
 				}
 
-				var pos any
+				var pos *SummaryPosition
 				if includePositions && p.Position != nil {
-					pos = map[string]any{"x": p.Position.X, "y": p.Position.Y, "z": p.Position.Z}
-				} else {
-					pos = nil
+					pos = &SummaryPosition{X: p.Position.X, Y: p.Position.Y, Z: p.Position.Z}
 				}
 
-				item := map[string]any{
-					"entityId": p.EntityID, "name": p.Name, "online": p.Online,
-					"ip": ip, "ping": p.Ping, "position": pos,
-					"level": p.Level, "health": p.Health, "stamina": p.Stamina,
-					"score": p.Score, "deaths": p.Deaths,
-				}
+				var platformID *SummaryID
 				if p.PlatformID != nil {
-					item["platformId"] = map[string]any{
-						"platformId": p.PlatformID.PlatformID, "userId": p.PlatformID.UserID, "combinedString": p.PlatformID.CombinedString,
-					}
+					platformID = &SummaryID{PlatformID: p.PlatformID.PlatformID, UserID: p.PlatformID.UserID, CombinedString: p.PlatformID.CombinedString}
 				}
+				var crossID *SummaryID
 				if p.CrossplatformID != nil {
-					item["crossplatformId"] = map[string]any{
-						"platformId": p.CrossplatformID.PlatformID, "userId": p.CrossplatformID.UserID, "combinedString": p.CrossplatformID.CombinedString,
-					}
+					crossID = &SummaryID{PlatformID: p.CrossplatformID.PlatformID, UserID: p.CrossplatformID.UserID, CombinedString: p.CrossplatformID.CombinedString}
 				}
+				var kills *SummaryKills
 				if p.Kills != nil {
-					item["kills"] = map[string]any{"zombies": p.Kills.Zombies, "players": p.Kills.Players}
+					kills = &SummaryKills{Zombies: p.Kills.Zombies, Players: p.Kills.Players}
 				}
+				var banned *SummaryBanned
 				if p.Banned != nil {
-					item["banned"] = map[string]any{"banActive": p.Banned.BanActive, "reason": p.Banned.Reason, "until": p.Banned.Until}
+					banned = &SummaryBanned{BanActive: p.Banned.BanActive, Reason: p.Banned.Reason, Until: p.Banned.Until}
 				}
-				outPlayers = append(outPlayers, item)
+
+				outPlayers = append(outPlayers, SummaryPlayer{
+					EntityID:        p.EntityID,
+					Name:            p.Name,
+					PlatformID:      platformID,
+					CrossplatformID: crossID,
+					Online:          p.Online,
+					IP:              ip,
+					Ping:            p.Ping,
+					Position:        pos,
+					Level:           p.Level,
+					Health:          p.Health,
+					Stamina:         p.Stamina,
+					Score:           p.Score,
+					Deaths:          p.Deaths,
+					Kills:           kills,
+					Banned:          banned,
+				})
 			}
 		}
 
-		outHostiles := make([]map[string]any, 0, len(hostiles.Data))
+		outHostiles := make([]SummaryHostile, 0, len(hostiles.Data))
 		if pHostiles.OK {
 			for i, h := range hostiles.Data {
 				if i >= limitHostiles {
 					break
 				}
-				item := map[string]any{
-					"id":   h.ID,
-					"name": h.Name,
-				}
-				// ★ nullable ではないので、includePositions=true のときだけ付ける
+				var pos *SummaryPosition
 				if includePositions {
-					item["position"] = map[string]any{
-						"x": h.Position.X,
-						"y": h.Position.Y,
-						"z": h.Position.Z,
-					}
+					pos = &SummaryPosition{X: h.Position.X, Y: h.Position.Y, Z: h.Position.Z}
 				}
-				outHostiles = append(outHostiles, item)
+				outHostiles = append(outHostiles, SummaryHostile{ID: h.ID, Name: h.Name, Position: pos})
 			}
 		}
 
@@ -985,28 +1115,116 @@ func serverSummaryHandler(cfg Config) http.HandlerFunc {
 		}
 		partial := !(pStats.OK && pPlayers.OK && pHostiles.OK)
 
-		resp := map[string]any{
-			"data": map[string]any{
-				"status":   st,
-				"stats":    statsObj,
-				"players":  outPlayers,
-				"hostiles": outHostiles,
+		summary := ServerSummaryResponse{
+			Data: ServerSummaryData{
+				Status:   st,
+				Stats:    statsObj,
+				Players:  outPlayers,
+				Hostiles: outHostiles,
 			},
-			"meta": map[string]any{
-				"serverTime": serverTime,
-				"partial":    partial,
+			Meta: ServerSummaryMeta{
+				ServerTime: serverTime,
+				Partial:    partial,
 			},
 		}
 		if verbose {
-			resp["meta"].(map[string]any)["sources"] = []map[string]any{
-				{"name": pStats.Name, "ok": pStats.OK, "latencyMs": pStats.LatencyMs, "error": nilIfEmpty(pStats.ErrMsg)},
-				{"name": pPlayers.Name, "ok": pPlayers.OK, "latencyMs": pPlayers.LatencyMs, "error": nilIfEmpty(pPlayers.ErrMsg)},
-				{"name": pHostiles.Name, "ok": pHostiles.OK, "latencyMs": pHostiles.LatencyMs, "error": nilIfEmpty(pHostiles.ErrMsg)},
+			srcs := make([]SummarySource, 0, 3)
+			if true {
+				var lat *int64
+				if pStats.LatencyMs > 0 {
+					l := pStats.LatencyMs
+					lat = &l
+				}
+				var er *string
+				if pStats.ErrMsg != "" {
+					e := pStats.ErrMsg
+					er = &e
+				}
+				srcs = append(srcs, SummarySource{Name: pStats.Name, OK: pStats.OK, LatencyMs: lat, Error: er})
 			}
+			if true {
+				var lat *int64
+				if pPlayers.LatencyMs > 0 {
+					l := pPlayers.LatencyMs
+					lat = &l
+				}
+				var er *string
+				if pPlayers.ErrMsg != "" {
+					e := pPlayers.ErrMsg
+					er = &e
+				}
+				srcs = append(srcs, SummarySource{Name: pPlayers.Name, OK: pPlayers.OK, LatencyMs: lat, Error: er})
+			}
+			if true {
+				var lat *int64
+				if pHostiles.LatencyMs > 0 {
+					l := pHostiles.LatencyMs
+					lat = &l
+				}
+				var er *string
+				if pHostiles.ErrMsg != "" {
+					e := pHostiles.ErrMsg
+					er = &e
+				}
+				srcs = append(srcs, SummarySource{Name: pHostiles.Name, OK: pHostiles.OK, LatencyMs: lat, Error: er})
+			}
+			summary.Meta.Sources = srcs
 		}
 
-		writeJSON(w, http.StatusOK, resp)
+		writeJSON(w, http.StatusOK, summary)
 	}
+}
+
+// /server/command: 上流 /api/command にフォワードして結果を返す
+func serverCommandHandler(cfg Config) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // クエリ: ?command=... （例: "version" or "say Hello"）
+        cmdLine := strings.TrimSpace(r.URL.Query().Get("command"))
+        if cmdLine == "" {
+            writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_REQUEST", Message: "missing query parameter: command"}})
+            return
+        }
+        if len(cmdLine) > 2000 {
+            writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_REQUEST", Message: "command too long"}})
+            return
+        }
+
+        // 最初の空白で command / parameters に分割
+        command := cmdLine
+        var parameters *string
+        if idx := strings.IndexAny(cmdLine, " \t"); idx >= 0 {
+            command = strings.TrimSpace(cmdLine[:idx])
+            rest := strings.TrimSpace(cmdLine[idx+1:])
+            if rest != "" {
+                parameters = &rest
+            }
+        }
+        if command == "" {
+            writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_REQUEST", Message: "invalid command"}})
+            return
+        }
+
+        // タイムアウトは固定（仕様からは除外されたため）
+        timeoutSec := 15
+        ctx := r.Context()
+        if timeoutSec > 0 {
+            var cancel context.CancelFunc
+            ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+            defer cancel()
+        }
+
+        base := strings.TrimRight(cfg.APIBaseURL, "/")
+        url := base + "/command"
+
+        // 上流は JSON で受ける想定のため CommandRequest に詰める
+        upstreamReq := CommandRequest{Command: command, Parameters: parameters}
+        var upstreamResp CommandResponse
+        if _, err := httpJSONPost(ctx, url, cfg.APIUser, cfg.APISecret, upstreamReq, &upstreamResp); err != nil {
+            writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: ErrorDetail{Code: "UPSTREAM_ERROR", Message: err.Error()}})
+            return
+        }
+        writeJSON(w, http.StatusOK, upstreamResp)
+    }
 }
 
 func authMW(bearerToken, apiKey string, allowNoAuth bool) Middleware {

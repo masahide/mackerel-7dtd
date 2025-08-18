@@ -283,7 +283,7 @@ it to avoid potential confusion"
 	withRunner(runner, func() {
 		// --- start (fresh) ---
 		{
-			resp, m := doJSON(t, ts, http.MethodPost, "/server/start", []byte(`{}`))
+			resp, m := doJSON(t, ts, http.MethodGet, "/server/start", nil)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("start: want 200 got %d", resp.StatusCode)
 			}
@@ -298,7 +298,7 @@ it to avoid potential confusion"
 
 		// --- stop (fresh) ---
 		{
-			resp, m := doJSON(t, ts, http.MethodPost, "/server/stop", []byte(`{}`))
+			resp, m := doJSON(t, ts, http.MethodGet, "/server/stop", nil)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("stop: want 200 got %d", resp.StatusCode)
 			}
@@ -313,7 +313,7 @@ it to avoid potential confusion"
 
 		// --- restart (down already + up already running) ---
 		{
-			resp, m := doJSON(t, ts, http.MethodPost, "/server/restart", []byte(`{}`))
+			resp, m := doJSON(t, ts, http.MethodGet, "/server/restart", nil)
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("restart: want 200 got %d", resp.StatusCode)
 			}

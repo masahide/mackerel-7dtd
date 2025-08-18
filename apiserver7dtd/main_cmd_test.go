@@ -62,7 +62,7 @@ func TestServerStart_ReturnsExecResult(t *testing.T) {
 
 	f := &fakeRunner{out: "hello\nworld\n", code: 0}
 	withRunner(f, func() {
-		resp, m, err := do(ts, http.MethodPost, "/server/start", []byte(`{}`))
+		resp, m, err := do(ts, http.MethodGet, "/server/start", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestServerStop_CommandErrorIncludesOutput(t *testing.T) {
 
 	f := &fakeRunner{out: "oops: permission denied\n", code: 1, err: errors.New("exit status 1")}
 	withRunner(f, func() {
-		resp, m, err := do(ts, http.MethodPost, "/server/stop", []byte(`{}`))
+		resp, m, err := do(ts, http.MethodGet, "/server/stop", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

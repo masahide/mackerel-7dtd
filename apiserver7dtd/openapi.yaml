@@ -35,7 +35,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ServerStatus"
   /server/start:
-    post:
+    get:
       operationId: startServer
       summary: サーバー起動（同期）
       responses:
@@ -52,7 +52,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
   /server/stop:
-    post:
+    get:
       operationId: stopServer
       summary: サーバー停止（同期）
       responses:
@@ -69,7 +69,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
   /server/restart:
-    post:
+    get:
       operationId: restartServer
       summary: サーバー再起動（同期）
       responses:
@@ -157,12 +157,74 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /server/command:
+    get:
+      operationId: execServerCommand
+      summary: 7dtdコンソールコマンドの実行（同期）
+      description: |
+        7 Days to Die のゲームサーバーに管理コンソールコマンドを実行します。
+        内部的には上流の `/api/command` にフォワードします。
+        返却 `data.result` はコマンド出力の生文字列です。
+      parameters:
+        - name: command
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 2000 }
+          examples:
+            version:
+              summary: "Show version"
+              value: "version"
+            say:
+              summary: "Say something"
+              value: "say Hello from API"
+      responses:
+        "200":
+          description: 実行成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResponse"
+              examples:
+                version:
+                  value:
+                    data:
+                      command: "version"
+                      parameters: ""
+                      result: "Game version: V 2.2 (b3) Compatibility Version: V 2.2\nMod TFP_Harmony: 1.1.0.4\n..."
+                    meta:
+                      serverTime: "2025-08-18T22:33:17.875056+09:00"
+        "400":
+          description: リクエスト不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: 上流エラー
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
   schemas:
+    CommandResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [command, parameters, result]
+          properties:
+            command: { type: string }
+            parameters: { type: string, nullable: true }
+            result: { type: string }
+        meta:
+          type: object
+          properties:
+            serverTime: { type: string, format: date-time, nullable: true }
     ServerStatus:
       type: object
       required: [serviceName, state]
