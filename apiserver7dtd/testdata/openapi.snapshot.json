@@ -1,6 +1,45 @@
 {
   "components": {
     "schemas": {
+      "CommandResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "parameters": {
+                "nullable": true,
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "parameters",
+              "result"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "properties": {
+              "serverTime": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "ErrorResponse": {
         "properties": {
           "error": {
@@ -420,6 +459,80 @@
           }
         },
         "summary": "ヘルスチェック"
+      }
+    },
+    "/server/command": {
+      "get": {
+        "description": "7 Days to Die のゲームサーバーに管理コンソールコマンドを実行します。\n内部的には上流の `/api/command` にフォワードします。\n返却 `data.result` はコマンド出力の生文字列です。\n",
+        "operationId": "execServerCommand",
+        "parameters": [
+          {
+            "examples": {
+              "say": {
+                "summary": "Say something",
+                "value": "say Hello from API"
+              },
+              "version": {
+                "summary": "Show version",
+                "value": "version"
+              }
+            },
+            "in": "query",
+            "name": "command",
+            "schema": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "version": {
+                    "value": {
+                      "data": {
+                        "command": "version",
+                        "parameters": "",
+                        "result": "Game version: V 2.2 (b3) Compatibility Version: V 2.2\nMod TFP_Harmony: 1.1.0.4\n..."
+                      },
+                      "meta": {
+                        "serverTime": "2025-08-18T22:33:17.875056+09:00"
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            },
+            "description": "実行成功"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "リクエスト不正"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "上流エラー"
+          }
+        },
+        "summary": "7dtdコンソールコマンドの実行（同期）"
       }
     },
     "/server/logs": {

@@ -27,6 +27,18 @@ const (
 	Unknown  ServerStatusState = "unknown"
 )
 
+// CommandResponse defines model for CommandResponse.
+type CommandResponse struct {
+	Data struct {
+		Command    string  `json:"command"`
+		Parameters *string `json:"parameters"`
+		Result     string  `json:"result"`
+	} `json:"data"`
+	Meta struct {
+		ServerTime *time.Time `json:"serverTime"`
+	} `json:"meta"`
+}
+
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
 	Error struct {
@@ -154,6 +166,11 @@ type SummaryPlayer struct {
 	} `json:"position"`
 	Score   *int     `json:"score"`
 	Stamina *float32 `json:"stamina"`
+}
+
+// ExecServerCommandParams defines parameters for ExecServerCommand.
+type ExecServerCommandParams struct {
+	Command *string `form:"command,omitempty" json:"command,omitempty"`
 }
 
 // GetServerLogsParams defines parameters for GetServerLogs.

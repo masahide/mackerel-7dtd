@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"bytes"
 	"io"
 	"log"
 	"net/http"
@@ -360,8 +361,26 @@ type ServerSummaryMeta struct {
 	Sources    []SummarySource `json:"sources,omitempty"`
 }
 type ServerSummaryResponse struct {
-	Data ServerSummaryData `json:"data"`
-	Meta ServerSummaryMeta `json:"meta"`
+    Data ServerSummaryData `json:"data"`
+    Meta ServerSummaryMeta `json:"meta"`
+}
+
+// --- Command DTOs ---
+type CommandRequest struct {
+    Command        string  `json:"command"`
+    Parameters     *string `json:"parameters"`
+    TimeoutSeconds *int    `json:"timeoutSeconds"`
+}
+
+type CommandResponse struct {
+    Data struct {
+        Command    string  `json:"command"`
+        Parameters *string `json:"parameters"`
+        Result     string  `json:"result"`
+    } `json:"data"`
+    Meta struct {
+        ServerTime *string `json:"serverTime"`
+    } `json:"meta"`
 }
 
 type CommandRunner interface {
@@ -520,7 +539,7 @@ func routes() http.Handler {
 }
 
 func buildRoutes(cfg Config) http.Handler {
-	mux := http.NewServeMux()
+    mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /server/status", serverStatus)
@@ -529,6 +548,7 @@ func buildRoutes(cfg Config) http.Handler {
     mux.HandleFunc("GET /server/start", serverStart)
     mux.HandleFunc("GET /server/stop", serverStop)
     mux.HandleFunc("GET /server/restart", serverRestart)
+    mux.HandleFunc("GET /server/command", serverCommandHandler(cfg))
 
 	// OpenAPI の配信：servers を cfg / リクエストから解決して上書き
 	mux.HandleFunc("GET /docs/openapi.yaml", openapiYAMLHandler(cfg))
@@ -851,6 +871,41 @@ func httpJSONGet(ctx context.Context, url, user, secret string, v any) (latencyM
 	return latency, json.NewDecoder(resp.Body).Decode(v)
 }
 
+// --- 簡易HTTP POST（JSONボディ＋ヘッダ付き） ---
+func httpJSONPost(ctx context.Context, url, user, secret string, in any, v any) (latencyMs int64, _err error) {
+    bodyBytes, err := json.Marshal(in)
+    if err != nil {
+        return 0, err
+    }
+    req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+    if err != nil {
+        return 0, err
+    }
+    req.Header.Set("Content-Type", "application/json")
+    if user != "" {
+        req.Header.Set("X-SDTD-API-TOKENNAME", user)
+    }
+    if secret != "" {
+        req.Header.Set("X-SDTD-API-SECRET", secret)
+    }
+    client := &http.Client{}
+    start := time.Now()
+    resp, err := client.Do(req)
+    latency := time.Since(start).Milliseconds()
+    if err != nil {
+        return latency, err
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+        b, _ := io.ReadAll(resp.Body)
+        return latency, fmt.Errorf("upstream %s status=%d body=%s", url, resp.StatusCode, string(b))
+    }
+    if v == nil {
+        return latency, nil
+    }
+    return latency, json.NewDecoder(resp.Body).Decode(v)
+}
+
 // --- IPマスク（例: 203.0.113.*） ---
 func maskIP(ip string) string {
 	if ip == "" {
@@ -1118,6 +1173,58 @@ func serverSummaryHandler(cfg Config) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, summary)
 	}
+}
+
+// /server/command: 上流 /api/command にフォワードして結果を返す
+func serverCommandHandler(cfg Config) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // クエリ: ?command=... （例: "version" or "say Hello"）
+        cmdLine := strings.TrimSpace(r.URL.Query().Get("command"))
+        if cmdLine == "" {
+            writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_REQUEST", Message: "missing query parameter: command"}})
+            return
+        }
+        if len(cmdLine) > 2000 {
+            writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_REQUEST", Message: "command too long"}})
+            return
+        }
+
+        // 最初の空白で command / parameters に分割
+        command := cmdLine
+        var parameters *string
+        if idx := strings.IndexAny(cmdLine, " \t"); idx >= 0 {
+            command = strings.TrimSpace(cmdLine[:idx])
+            rest := strings.TrimSpace(cmdLine[idx+1:])
+            if rest != "" {
+                parameters = &rest
+            }
+        }
+        if command == "" {
+            writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: ErrorDetail{Code: "INVALID_REQUEST", Message: "invalid command"}})
+            return
+        }
+
+        // タイムアウトは固定（仕様からは除外されたため）
+        timeoutSec := 15
+        ctx := r.Context()
+        if timeoutSec > 0 {
+            var cancel context.CancelFunc
+            ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+            defer cancel()
+        }
+
+        base := strings.TrimRight(cfg.APIBaseURL, "/")
+        url := base + "/command"
+
+        // 上流は JSON で受ける想定のため CommandRequest に詰める
+        upstreamReq := CommandRequest{Command: command, Parameters: parameters}
+        var upstreamResp CommandResponse
+        if _, err := httpJSONPost(ctx, url, cfg.APIUser, cfg.APISecret, upstreamReq, &upstreamResp); err != nil {
+            writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: ErrorDetail{Code: "UPSTREAM_ERROR", Message: err.Error()}})
+            return
+        }
+        writeJSON(w, http.StatusOK, upstreamResp)
+    }
 }
 
 func authMW(bearerToken, apiKey string, allowNoAuth bool) Middleware {

@@ -165,20 +165,17 @@ paths:
         7 Days to Die のゲームサーバーに管理コンソールコマンドを実行します。
         内部的には上流の `/api/command` にフォワードします。
         返却 `data.result` はコマンド出力の生文字列です。
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CommandRequest"
-            examples:
-              version:
-                value:
-                  command: "version"
-              say:
-                value:
-                  command: "say"
-                  parameters: "Hello from API"
+      parameters:
+        - name: command
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 2000 }
+          examples:
+            version:
+              summary: "Show version"
+              value: "version"
+            say:
+              summary: "Say something"
+              value: "say Hello from API"
       responses:
         "200":
           description: 実行成功
@@ -213,26 +210,6 @@ components:
       type: http
       scheme: bearer
   schemas:
-    CommandRequest:
-      type: object
-      required: [command]
-      properties:
-        command:
-          type: string
-          description: 実行するコンソールコマンド名（例: version, say, kick など）
-          minLength: 1
-          maxLength: 100
-        parameters:
-          type: string
-          nullable: true
-          description: コマンドに渡す引数をスペース区切りで1本の文字列として指定
-          maxLength: 2000
-        timeoutSeconds:
-          type: integer
-          minimum: 1
-          maximum: 60
-          default: 15
-          description: 上流呼び出しのタイムアウト秒数
     CommandResponse:
       type: object
       required: [data, meta]
@@ -241,9 +218,9 @@ components:
           type: object
           required: [command, parameters, result]
           properties:
-            command:    { type: string }
+            command: { type: string }
             parameters: { type: string, nullable: true }
-            result:     { type: string }
+            result: { type: string }
         meta:
           type: object
           properties:
