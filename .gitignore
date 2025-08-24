@@ -20,6 +20,5 @@
 # Go workspace file
 go.work
 .env
-playerCountBot
 mackerel-7dtd
 apiserver7dtd/apiserver7dtd

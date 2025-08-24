@@ -15,7 +15,6 @@ import (
 
 type env struct {
 	telnet.Env
-	// Discord
 	DiscordToken    string `envconfig:"DISCORD_TOKEN"`
 	DiscordServerID string `envconfig:"DISCORD_SERVER_ID"`
 	// 7Days To Die server
@@ -24,10 +23,14 @@ type env struct {
 	APISecret   string `envconfig:"API_SECRET"`
 }
 
+type GameStatusProvider interface {
+	GetStatus() (GameStatus, error)
+}
+
 type discordbot struct {
-	env
 	s *discordgo.Session
-	t *telnet.Telnet7days
+	env
+	GameStatusProvider
 }
 
 type GameTime struct {
@@ -43,7 +46,11 @@ type GameStatus struct {
 	Animals  int      `json:"animals"`
 }
 
-func (d *discordbot) restAPIgetGameStatus() (GameStatus, error) {
+type restAPIDiscordbot struct {
+	env
+}
+
+func (d *restAPIDiscordbot) GetStatus() (GameStatus, error) {
 	res := GameStatus{}
 	req, err := http.NewRequest(http.MethodGet, d.GetStatsURL, nil)
 	if err != nil {
@@ -84,7 +91,11 @@ func main() {
 
 	d := &discordbot{
 		env: e,
-		t:   &telnet.Telnet7days{Env: e.Env},
+		s:   dg,
+		GameStatusProvider: map[bool]GameStatusProvider{
+			true:  &telnetDiscordbot{env: e, t: &telnet.Telnet7days{Env: e.Env}},
+			false: &restAPIDiscordbot{env: e},
+		}[len(e.ServerAddr) > 0],
 	}
 	dg.AddHandler(d.ready)
 	err = dg.Open()
@@ -93,7 +104,6 @@ func main() {
 		return
 	}
 	defer dg.Close()
-
 	select {}
 }
 
@@ -106,22 +116,6 @@ func (d *discordbot) ready(s *discordgo.Session, event *discordgo.Ready) {
 			d.update()
 		}
 	}()
-}
-
-func (d *discordbot) telnetGetStatus() (GameStatus, error) {
-	day, err := d.t.GetTime()
-	if err != nil {
-		return GameStatus{}, err
-	}
-	players, err := d.t.GetPlayers()
-	if err != nil {
-		return GameStatus{}, err
-	}
-
-	return GameStatus{
-		GameTime: GameTime{Days: day.Days, Hours: day.Hours, Minutes: day.Minutes},
-		Players:  len(players), Hostiles: 0, Animals: 0,
-	}, nil
 }
 
 func (d *discordbot) updateStatus(stats GameStatus, err error) {
@@ -138,10 +132,6 @@ func (d *discordbot) updateStatus(stats GameStatus, err error) {
 }
 
 func (d *discordbot) update() {
-	stats, err := map[bool]func() (GameStatus, error){
-		true:  d.telnetGetStatus,
-		false: d.restAPIgetGameStatus,
-	}[len(d.ServerAddr) > 0]()
-
+	stats, err := d.GetStatus()
 	d.updateStatus(stats, err)
 }
