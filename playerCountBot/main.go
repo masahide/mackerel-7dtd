@@ -367,7 +367,7 @@ func (d *discordbot) updateChannelTopic(playerNames []string, playerCount int, d
 
 	}
 
-	topic := "[Login](https://sc.suzu.me.uk/157.7.208.157:26900)\n[map](http://pve01.suzu.me.uk:8080/legacymap/index.html)\n"
+	topic := "[Login](https://sc.suzu.me.uk/157.7.208.157:26900)\n[map](https://7w.suzu.me.uk/)\n"
 	topic = topic + headerLine + "\n" + playerLine
 	if zombieLine != "" {
 		topic += "\n" + zombieLine
