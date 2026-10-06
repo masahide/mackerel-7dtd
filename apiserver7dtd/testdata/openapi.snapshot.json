@@ -421,6 +421,226 @@
           }
         },
         "type": "object"
+      },
+      "UpdateJob": {
+        "properties": {
+          "backupId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currentVersion": {
+            "type": "string"
+          },
+          "error": {
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "details": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "queued",
+              "checking",
+              "stopping",
+              "checking_stopped",
+              "backing_up",
+              "updating",
+              "starting",
+              "verifying",
+              "completed"
+            ],
+            "type": "string",
+            "x-enum-varnames": [
+              "UpdateJobPhaseQueued",
+              "UpdateJobPhaseChecking",
+              "UpdateJobPhaseStopping",
+              "UpdateJobPhaseCheckingStopped",
+              "UpdateJobPhaseBackingUp",
+              "UpdateJobPhaseUpdating",
+              "UpdateJobPhaseStarting",
+              "UpdateJobPhaseVerifying",
+              "UpdateJobPhaseCompleted"
+            ]
+          },
+          "planId": {
+            "type": "string"
+          },
+          "recoveryRequired": {
+            "type": "boolean"
+          },
+          "resultVersion": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted"
+            ],
+            "type": "string",
+            "x-enum-varnames": [
+              "UpdateJobStatusQueued",
+              "UpdateJobStatusRunning",
+              "UpdateJobStatusSucceeded",
+              "UpdateJobStatusFailed",
+              "UpdateJobStatusInterrupted"
+            ]
+          },
+          "targetVersion": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "planId",
+          "status",
+          "phase",
+          "createdAt",
+          "updatedAt",
+          "currentVersion",
+          "targetVersion",
+          "recoveryRequired"
+        ],
+        "type": "object"
+      },
+      "UpdateJobRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "enum": [
+              "UPDATE SUZUME"
+            ],
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "pattern": "^[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          },
+          "planId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "planId",
+          "confirmation",
+          "idempotencyKey"
+        ],
+        "type": "object"
+      },
+      "UpdateJobResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UpdateJob"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "UpdatePlan": {
+        "properties": {
+          "blockers": {
+            "items": {
+              "enum": [
+                "PLAYERS_ONLINE",
+                "ALREADY_CURRENT"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "canExecute": {
+            "type": "boolean"
+          },
+          "confirmation": {
+            "enum": [
+              "UPDATE SUZUME"
+            ],
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currentVersion": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "onlinePlayers": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "targetVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "planId",
+          "createdAt",
+          "expiresAt",
+          "currentVersion",
+          "targetVersion",
+          "onlinePlayers",
+          "canExecute",
+          "blockers",
+          "confirmation",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "UpdatePlanResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UpdatePlan"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -521,6 +741,16 @@
             },
             "description": "リクエスト不正"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Another operation/recovery holds the lock, or update state is unavailable"
+          },
           "502": {
             "content": {
               "application/json": {
@@ -530,6 +760,16 @@
               }
             },
             "description": "上流エラー"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Another operation/recovery holds the lock, or update state is unavailable"
           }
         },
         "summary": "7dtdコンソールコマンドの実行（同期）"
@@ -629,6 +869,16 @@
               }
             },
             "description": "競合"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Another operation/recovery holds the lock, or update state is unavailable"
           }
         },
         "summary": "サーバー再起動（同期）"
@@ -657,6 +907,16 @@
               }
             },
             "description": "競合"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Another operation/recovery holds the lock, or update state is unavailable"
           }
         },
         "summary": "サーバー起動（同期）"
@@ -703,6 +963,16 @@
               }
             },
             "description": "競合"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Another operation/recovery holds the lock, or update state is unavailable"
           }
         },
         "summary": "サーバー停止（同期）"
@@ -779,6 +1049,168 @@
           }
         },
         "summary": "現在サーバー情報を一括取得"
+      }
+    },
+    "/server/update/jobs": {
+      "post": {
+        "description": "Requires confirmation UPDATE SUZUME and a durable idempotency key. The same request/key returns\nthe original job, even after expiry or restart. A plan can produce only one job. Fresh player\nand version checks happen asynchronously; their failures appear in job.error, after acceptance.\nNever retry an ambiguous acceptance with a different key.\n",
+        "operationId": "createServerUpdateJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            },
+            "description": "Same request/key; original job returned"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            },
+            "description": "Durable job accepted; poll Location",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid confirmation, unauthorized, expired/used/blocked plan, busy, conflicting key or unavailable state"
+          }
+        },
+        "summary": "Confirm and enqueue an asynchronous update"
+      }
+    },
+    "/server/update/jobs/latest": {
+      "get": {
+        "operationId": "getLatestServerUpdateJob",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            },
+            "description": "Last known job state"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized, no jobs or unavailable state"
+          }
+        },
+        "summary": "Inspect the latest update, including an interrupted job after API restart"
+      }
+    },
+    "/server/update/jobs/{jobId}": {
+      "get": {
+        "operationId": "getServerUpdateJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateJobResponse"
+                }
+              }
+            },
+            "description": "Last known job state; phase is a stage, not a percentage"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized, job not found or unavailable state"
+          }
+        },
+        "summary": "Inspect update progress and result"
+      }
+    },
+    "/server/update/plan": {
+      "post": {
+        "description": "Read-only preflight. Commands and target version are administrator-owned. Unknown player counts fail closed. Plans expire after five minutes and are invalidated on API restart. Version values are the normalized Game version line, including build and compatibility information.",
+        "operationId": "planServerUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePlanResponse"
+                }
+              }
+            },
+            "description": "Plan, including blocking conditions"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request, unauthorized, busy, precheck failed or update unavailable"
+          }
+        },
+        "summary": "Create a five-minute server update plan"
       }
     }
   },

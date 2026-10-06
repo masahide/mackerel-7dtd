@@ -51,6 +51,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Another operation/recovery holds the lock, or update state is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /server/stop:
     get:
       operationId: stopServer
@@ -68,6 +74,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Another operation/recovery holds the lock, or update state is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /server/restart:
     get:
       operationId: restartServer
@@ -81,6 +93,12 @@ paths:
                 $ref: "#/components/schemas/RestartOperationResult"
         "409":
           description: 競合
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Another operation/recovery holds the lock, or update state is unavailable
           content:
             application/json:
               schema:
@@ -204,12 +222,179 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Another operation/recovery holds the lock, or update state is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+        "503":
+          description: Another operation/recovery holds the lock, or update state is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /server/update/plan:
+    post:
+      operationId: planServerUpdate
+      summary: Create a five-minute server update plan
+      description: Read-only preflight. Commands and target version are administrator-owned. Unknown player counts fail closed. Plans expire after five minutes and are invalidated on API restart. Version values are the normalized Game version line, including build and compatibility information.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false}
+      responses:
+        "200":
+          description: Plan, including blocking conditions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UpdatePlanResponse"}
+        default:
+          description: Invalid request, unauthorized, busy, precheck failed or update unavailable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorResponse"}
+  /server/update/jobs:
+    post:
+      operationId: createServerUpdateJob
+      summary: Confirm and enqueue an asynchronous update
+      description: |
+        Requires confirmation UPDATE SUZUME and a durable idempotency key. The same request/key returns
+        the original job, even after expiry or restart. A plan can produce only one job. Fresh player
+        and version checks happen asynchronously; their failures appear in job.error, after acceptance.
+        Never retry an ambiguous acceptance with a different key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdateJobRequest"}
+      responses:
+        "202":
+          description: Durable job accepted; poll Location
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UpdateJobResponse"}
+        "200":
+          description: Same request/key; original job returned
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UpdateJobResponse"}
+        default:
+          description: Invalid confirmation, unauthorized, expired/used/blocked plan, busy, conflicting key or unavailable state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorResponse"}
+  /server/update/jobs/latest:
+    get:
+      operationId: getLatestServerUpdateJob
+      summary: Inspect the latest update, including an interrupted job after API restart
+      responses:
+        "200":
+          description: Last known job state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UpdateJobResponse"}
+        default:
+          description: Unauthorized, no jobs or unavailable state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorResponse"}
+  /server/update/jobs/{jobId}:
+    get:
+      operationId: getServerUpdateJob
+      summary: Inspect update progress and result
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Last known job state; phase is a stage, not a percentage
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UpdateJobResponse"}
+        default:
+          description: Unauthorized, job not found or unavailable state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ErrorResponse"}
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
   schemas:
+    UpdatePlanResponse:
+      type: object
+      required: [data]
+      properties:
+        data: {$ref: "#/components/schemas/UpdatePlan"}
+    UpdatePlan:
+      type: object
+      required: [planId, createdAt, expiresAt, currentVersion, targetVersion, onlinePlayers, canExecute, blockers, confirmation, steps]
+      properties:
+        planId: {type: string}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        currentVersion: {type: string}
+        targetVersion: {type: string}
+        onlinePlayers: {type: integer, minimum: 0}
+        canExecute: {type: boolean}
+        blockers:
+          type: array
+          items: {type: string, enum: [PLAYERS_ONLINE, ALREADY_CURRENT]}
+        confirmation: {type: string, enum: [UPDATE SUZUME]}
+        steps:
+          type: array
+          items: {type: string}
+    UpdateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [planId, confirmation, idempotencyKey]
+      properties:
+        planId: {type: string, minLength: 1}
+        confirmation: {type: string, enum: [UPDATE SUZUME]}
+        idempotencyKey: {type: string, pattern: '^[A-Za-z0-9_-]{16,128}$'}
+    UpdateJobResponse:
+      type: object
+      required: [data]
+      properties:
+        data: {$ref: "#/components/schemas/UpdateJob"}
+    UpdateJob:
+      type: object
+      required: [jobId, planId, status, phase, createdAt, updatedAt, currentVersion, targetVersion, recoveryRequired]
+      properties:
+        jobId: {type: string}
+        planId: {type: string}
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, interrupted]
+          x-enum-varnames: [UpdateJobStatusQueued, UpdateJobStatusRunning, UpdateJobStatusSucceeded, UpdateJobStatusFailed, UpdateJobStatusInterrupted]
+        phase:
+          type: string
+          enum: [queued, checking, stopping, checking_stopped, backing_up, updating, starting, verifying, completed]
+          x-enum-varnames: [UpdateJobPhaseQueued, UpdateJobPhaseChecking, UpdateJobPhaseStopping, UpdateJobPhaseCheckingStopped, UpdateJobPhaseBackingUp, UpdateJobPhaseUpdating, UpdateJobPhaseStarting, UpdateJobPhaseVerifying, UpdateJobPhaseCompleted]
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+        currentVersion: {type: string}
+        targetVersion: {type: string}
+        resultVersion: {type: string}
+        backupId: {type: string}
+        recoveryRequired: {type: boolean}
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            details: {type: object, additionalProperties: true}
     CommandResponse:
       type: object
       required: [data, meta]

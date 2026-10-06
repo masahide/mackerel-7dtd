@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
@@ -151,6 +152,19 @@ type Config struct {
 	AuthBearerToken string `envconfig:"AUTH_BEARER_TOKEN"`             // 例: 長いランダム文字列
 	APIKey          string `envconfig:"API_KEY"`                       // 例: 代替のAPIキー(任意)
 	AllowNoAuth     bool   `envconfig:"ALLOW_NO_AUTH" default:"false"` // 一時無効化用
+
+	// Update commands are administrator-owned hooks, with no production defaults.
+	UpdateEnabled         bool          `envconfig:"UPDATE_ENABLED" default:"false"`
+	UpdateStateDir        string        `envconfig:"UPDATE_STATE_DIR"`
+	UpdateTargetVersion   string        `envconfig:"UPDATE_TARGET_VERSION"`
+	UpdatePreflightCmd    string        `envconfig:"UPDATE_PREFLIGHT_CMD"`
+	UpdateStopCmd         string        `envconfig:"UPDATE_STOP_CMD"`
+	UpdateCheckStoppedCmd string        `envconfig:"UPDATE_CHECK_STOPPED_CMD"`
+	UpdateBackupCmd       string        `envconfig:"UPDATE_BACKUP_CMD"`
+	UpdateApplyCmd        string        `envconfig:"UPDATE_APPLY_CMD"`
+	UpdateStartCmd        string        `envconfig:"UPDATE_START_CMD"`
+	UpdateTimeout         time.Duration `envconfig:"UPDATE_TIMEOUT" default:"60m"`
+	UpdateVerifyTimeout   time.Duration `envconfig:"UPDATE_VERIFY_TIMEOUT" default:"5m"`
 }
 
 // グローバル設定（テスト互換のため維持）
@@ -539,16 +553,24 @@ func routes() http.Handler {
 }
 
 func buildRoutes(cfg Config) http.Handler {
+	return buildRoutesWithUpdates(cfg, newUpdateManager(cfg))
+}
+
+func buildRoutesWithUpdates(cfg Config, updates *updateManager) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /server/status", serverStatus)
 	mux.HandleFunc("GET /server/summary", serverSummaryHandler(cfg))
 	mux.HandleFunc("GET /server/logs", serverLogs)
-	mux.HandleFunc("GET /server/start", serverStart)
-	mux.HandleFunc("GET /server/stop", serverStop)
-	mux.HandleFunc("GET /server/restart", serverRestart)
-	mux.HandleFunc("GET /server/command", serverCommandHandler(cfg))
+	mux.HandleFunc("GET /server/start", updates.guard(serverStart))
+	mux.HandleFunc("GET /server/stop", updates.guard(serverStop))
+	mux.HandleFunc("GET /server/restart", updates.guard(serverRestart))
+	mux.HandleFunc("GET /server/command", updates.guard(serverCommandHandler(cfg)))
+	mux.HandleFunc("POST /server/update/plan", updates.planHandler)
+	mux.HandleFunc("POST /server/update/jobs", updates.createJobHandler)
+	mux.HandleFunc("GET /server/update/jobs/latest", updates.latestJobHandler)
+	mux.HandleFunc("GET /server/update/jobs/{jobId}", updates.jobHandler)
 
 	// OpenAPI の配信：servers を cfg / リクエストから解決して上書き
 	mux.HandleFunc("GET /docs/openapi.yaml", openapiYAMLHandler(cfg))
@@ -629,13 +651,15 @@ func main() {
 		log.Fatalf("config error: %v", err)
 	}
 
+	updates := newUpdateManager(appCfg)
+	defer updates.close()
 	srv := &http.Server{
 		Addr:              appCfg.APIAddr,
-		Handler:           buildRoutes(appCfg),
+		Handler:           buildRoutesWithUpdates(appCfg, updates),
 		ReadHeaderTimeout: appCfg.ReadHeaderTimeout,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go func() {

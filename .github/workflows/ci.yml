@@ -40,6 +40,9 @@ jobs:
       - name: Run unit tests
         run: cd apiserver7dtd; go test ./...
 
+      - name: Race-check update jobs
+        run: go test -race ./apiserver7dtd -run TestUpdate
+
       # （任意だが便利）スナップショット専用テストだけ先に走らせる
       - name: OpenAPI snapshot test (served spec validation)
         run: cd apiserver7dtd; go test -run TestOpenAPISnapshot ./...

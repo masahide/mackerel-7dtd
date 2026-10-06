@@ -27,6 +27,44 @@ const (
 	Unknown  ServerStatusState = "unknown"
 )
 
+// Defines values for UpdateJobPhase.
+const (
+	UpdateJobPhaseBackingUp       UpdateJobPhase = "backing_up"
+	UpdateJobPhaseChecking        UpdateJobPhase = "checking"
+	UpdateJobPhaseCheckingStopped UpdateJobPhase = "checking_stopped"
+	UpdateJobPhaseCompleted       UpdateJobPhase = "completed"
+	UpdateJobPhaseQueued          UpdateJobPhase = "queued"
+	UpdateJobPhaseStarting        UpdateJobPhase = "starting"
+	UpdateJobPhaseStopping        UpdateJobPhase = "stopping"
+	UpdateJobPhaseUpdating        UpdateJobPhase = "updating"
+	UpdateJobPhaseVerifying       UpdateJobPhase = "verifying"
+)
+
+// Defines values for UpdateJobStatus.
+const (
+	UpdateJobStatusFailed      UpdateJobStatus = "failed"
+	UpdateJobStatusInterrupted UpdateJobStatus = "interrupted"
+	UpdateJobStatusQueued      UpdateJobStatus = "queued"
+	UpdateJobStatusRunning     UpdateJobStatus = "running"
+	UpdateJobStatusSucceeded   UpdateJobStatus = "succeeded"
+)
+
+// Defines values for UpdateJobRequestConfirmation.
+const (
+	UpdateJobRequestConfirmationUPDATESUZUME UpdateJobRequestConfirmation = "UPDATE SUZUME"
+)
+
+// Defines values for UpdatePlanBlockers.
+const (
+	ALREADYCURRENT UpdatePlanBlockers = "ALREADY_CURRENT"
+	PLAYERSONLINE  UpdatePlanBlockers = "PLAYERS_ONLINE"
+)
+
+// Defines values for UpdatePlanConfirmation.
+const (
+	UpdatePlanConfirmationUPDATESUZUME UpdatePlanConfirmation = "UPDATE SUZUME"
+)
+
 // CommandResponse defines model for CommandResponse.
 type CommandResponse struct {
 	Data struct {
@@ -168,6 +206,73 @@ type SummaryPlayer struct {
 	Stamina *float32 `json:"stamina"`
 }
 
+// UpdateJob defines model for UpdateJob.
+type UpdateJob struct {
+	BackupId       *string   `json:"backupId,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	CurrentVersion string    `json:"currentVersion"`
+	Error          *struct {
+		Code    string                  `json:"code"`
+		Details *map[string]interface{} `json:"details,omitempty"`
+		Message string                  `json:"message"`
+	} `json:"error,omitempty"`
+	FinishedAt       *time.Time      `json:"finishedAt,omitempty"`
+	JobId            string          `json:"jobId"`
+	Phase            UpdateJobPhase  `json:"phase"`
+	PlanId           string          `json:"planId"`
+	RecoveryRequired bool            `json:"recoveryRequired"`
+	ResultVersion    *string         `json:"resultVersion,omitempty"`
+	Status           UpdateJobStatus `json:"status"`
+	TargetVersion    string          `json:"targetVersion"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+}
+
+// UpdateJobPhase defines model for UpdateJob.Phase.
+type UpdateJobPhase string
+
+// UpdateJobStatus defines model for UpdateJob.Status.
+type UpdateJobStatus string
+
+// UpdateJobRequest defines model for UpdateJobRequest.
+type UpdateJobRequest struct {
+	Confirmation   UpdateJobRequestConfirmation `json:"confirmation"`
+	IdempotencyKey string                       `json:"idempotencyKey"`
+	PlanId         string                       `json:"planId"`
+}
+
+// UpdateJobRequestConfirmation defines model for UpdateJobRequest.Confirmation.
+type UpdateJobRequestConfirmation string
+
+// UpdateJobResponse defines model for UpdateJobResponse.
+type UpdateJobResponse struct {
+	Data UpdateJob `json:"data"`
+}
+
+// UpdatePlan defines model for UpdatePlan.
+type UpdatePlan struct {
+	Blockers       []UpdatePlanBlockers   `json:"blockers"`
+	CanExecute     bool                   `json:"canExecute"`
+	Confirmation   UpdatePlanConfirmation `json:"confirmation"`
+	CreatedAt      time.Time              `json:"createdAt"`
+	CurrentVersion string                 `json:"currentVersion"`
+	ExpiresAt      time.Time              `json:"expiresAt"`
+	OnlinePlayers  int                    `json:"onlinePlayers"`
+	PlanId         string                 `json:"planId"`
+	Steps          []string               `json:"steps"`
+	TargetVersion  string                 `json:"targetVersion"`
+}
+
+// UpdatePlanBlockers defines model for UpdatePlan.Blockers.
+type UpdatePlanBlockers string
+
+// UpdatePlanConfirmation defines model for UpdatePlan.Confirmation.
+type UpdatePlanConfirmation string
+
+// UpdatePlanResponse defines model for UpdatePlanResponse.
+type UpdatePlanResponse struct {
+	Data UpdatePlan `json:"data"`
+}
+
 // ExecServerCommandParams defines parameters for ExecServerCommand.
 type ExecServerCommandParams struct {
 	Command *string `form:"command,omitempty" json:"command,omitempty"`
@@ -186,3 +291,12 @@ type GetServerSummaryParams struct {
 	TimeoutSeconds   *int  `form:"timeoutSeconds,omitempty" json:"timeoutSeconds,omitempty"`
 	Verbose          *bool `form:"verbose,omitempty" json:"verbose,omitempty"`
 }
+
+// PlanServerUpdateJSONBody defines parameters for PlanServerUpdate.
+type PlanServerUpdateJSONBody = map[string]interface{}
+
+// CreateServerUpdateJobJSONRequestBody defines body for CreateServerUpdateJob for application/json ContentType.
+type CreateServerUpdateJobJSONRequestBody = UpdateJobRequest
+
+// PlanServerUpdateJSONRequestBody defines body for PlanServerUpdate for application/json ContentType.
+type PlanServerUpdateJSONRequestBody = PlanServerUpdateJSONBody
