@@ -135,19 +135,51 @@ class RuntimePreparer:
         finally:
             os.close(fd)
 
-    def prepare(self, preparation_id):
+    def resolve_frozen_image(self, preparation_id):
+        # Docker can hide untagged commit images in its default listing. Resolve
+        # the unique administrator label from all images and validate metadata,
+        # rather than trusting the CLI's human-facing commit output.
+        ids = set(self.runner.run(["docker", "image", "ls", "--all", "--filter",
+                                   "label=org.suzume.preparation=" + preparation_id,
+                                   "--no-trunc", "--quiet"], 30).splitlines())
+        if len(ids) != 1 or not all(re.fullmatch(r"sha256:[0-9a-f]{64}", i) for i in ids):
+            raise Blocked("FROZEN_IMAGE_ID_UNAVAILABLE")
+        frozen = ids.pop()
+        values = json.loads(self.runner.run(["docker", "image", "inspect", frozen], 30))
+        if len(values) != 1:
+            raise Blocked("FROZEN_IMAGE_METADATA_MISMATCH")
+        info = values[0]
+        config = info.get("Config") or {}
+        env = dict(x.split("=", 1) for x in (config.get("Env") or []) if "=" in x)
+        if (info.get("Id") != frozen or (config.get("Labels") or {}).get("org.suzume.preparation") != preparation_id
+                or config.get("Entrypoint") != ["/home/sdtdserver/openvpn.sh"]
+                or any(env.get(k) != v for k, v in FIXED_ENV.items())):
+            raise Blocked("FROZEN_IMAGE_METADATA_MISMATCH")
+        return frozen
+
+    def prepare(self, preparation_id, resume_image_id_failure=False):
         if not isinstance(preparation_id, str) or not JOB.fullmatch(preparation_id):
             raise Blocked("INVALID_PREPARATION_ID")
         base = self.root / "upgrade-backups"
         if base.is_symlink():
             raise Blocked("UNSAFE_PREPARATION_DIRECTORY")
         folder = base / ("adapter-preparation-" + preparation_id)
-        try:
-            folder.mkdir(mode=0o700)  # Never retry a possibly interrupted operation.
-        except FileExistsError:
-            raise Blocked("PREPARATION_EXISTS_INSPECT_STATE_FIRST") from None
-        state = {"preparationId": preparation_id, "phase": "checking", "createdAt": time.time(),
-                 "verified": False, "runtimeRestored": False, "productionEnabled": False}
+        if resume_image_id_failure:
+            if folder.is_symlink() or not folder.is_dir():
+                raise Blocked("RESUME_STATE_UNAVAILABLE")
+            state = json.loads((folder / "state.json").read_text())
+            if (state.get("preparationId") != preparation_id or state.get("phase") != "failed"
+                    or state.get("errorCode") not in ["FROZEN_IMAGE_ID_UNAVAILABLE", "RESUME_LIVE_RUNTIME_CHANGED"]
+                    or state.get("frozenImageId") or state.get("verified") is not False
+                    or any((folder / name).exists() for name in ["runtime-image.tar", "target-serverfiles.tar"])):
+                raise Blocked("RESUME_STATE_NOT_SUPPORTED")
+        else:
+            try:
+                folder.mkdir(mode=0o700)  # Never retry a possibly interrupted operation.
+            except FileExistsError:
+                raise Blocked("PREPARATION_EXISTS_INSPECT_STATE_FIRST") from None
+            state = {"preparationId": preparation_id, "phase": "checking", "createdAt": time.time(),
+                     "verified": False, "runtimeRestored": False, "productionEnabled": False}
         def phase(value):
             state["phase"] = value
             state["updatedAt"] = time.time()
@@ -157,19 +189,35 @@ class RuntimePreparer:
             phase("checking")
             with self.release_lock():
                 before = self.inspect_live()
+                if resume_image_id_failure:
+                    original = json.loads((folder / "container.private.json").read_text())
+                    if any(before.get(key) != original.get(key) for key in ["Id", "Image", "RestartCount", "Config"]):
+                        raise Blocked("RESUME_LIVE_RUNTIME_CHANGED")
+                    # Inspect mount order is unspecified. Compare all fields,
+                    # including external VPN binds, without relying on order.
+                    normalize = lambda ins: sorted(ins.get("Mounts", []), key=lambda m: m["Destination"])
+                    if normalize(before) != normalize(original):
+                        raise Blocked("RESUME_LIVE_RUNTIME_CHANGED")
+                    if before["State"].get("StartedAt") != original["State"].get("StartedAt"):
+                        raise Blocked("RESUME_LIVE_RUNTIME_CHANGED")
                 static = self.checkpoint()
                 mods = mod_inventory(self.root)
                 # A full private inspect is recovery input; never expose Env.
                 atomic_json(folder / "container.private.json", before)
-                phase("freezing_runtime")
-                args = ["docker", "commit", "--pause=false", "--change", "LABEL org.suzume.preparation=" + preparation_id]
-                for key, value in FIXED_ENV.items():
-                    args += ["--change", "ENV " + key + "=" + value]
-                args.append(CONTAINER)
-                frozen = self.runner.run(args, 600).strip()
-                if not re.fullmatch(r"sha256:[0-9a-f]{64}", frozen):
-                    raise Blocked("FROZEN_IMAGE_ID_UNAVAILABLE")
+                if not resume_image_id_failure:
+                    phase("freezing_runtime")
+                    args = ["docker", "commit", "--pause=false", "--change", "LABEL org.suzume.preparation=" + preparation_id]
+                    for key, value in FIXED_ENV.items():
+                        args += ["--change", "ENV " + key + "=" + value]
+                    args.append(CONTAINER)
+                    output = self.runner.run(args, 600)
+                    state.update(commitOutputBytes=len(output.encode()), commitOutputSha256=hashlib.sha256(output.encode()).hexdigest())
+                else:
+                    state["recoveredExistingImage"] = True
+                    phase("resolving_existing_image")
+                frozen = self.resolve_frozen_image(preparation_id)
                 state["frozenImageId"] = frozen
+                state.pop("errorCode", None)
                 phase("checking_frozen_runtime")
                 if self.checkpoint(frozen) != static or self.checkpoint() != static:
                     raise Blocked("STATIC_RUNTIME_CHANGED")
@@ -208,9 +256,10 @@ class RuntimePreparer:
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 3 or sys.argv[1] != "prepare":
-            raise Blocked("USE_PREPARE_WITH_ID")
-        output = RuntimePreparer(DockerRunner(), emit=lambda data: print(json.dumps(data), flush=True)).prepare(sys.argv[2])
+        if len(sys.argv) != 3 or sys.argv[1] not in ["prepare", "resume-image-id-failure"]:
+            raise Blocked("USE_PREPARE_OR_IMAGE_ID_RESUME_WITH_ID")
+        output = RuntimePreparer(DockerRunner(), emit=lambda data: print(json.dumps(data), flush=True)).prepare(
+            sys.argv[2], resume_image_id_failure=sys.argv[1] == "resume-image-id-failure")
         print(json.dumps(output), flush=True)
     except Blocked as error:
         print(json.dumps({"errorCode": str(error)}), flush=True)

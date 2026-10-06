@@ -20,6 +20,9 @@ class FixtureRunner:
         self.static_changed = False
         self.change_mod = False
         self.image_env = dict(freeze.FIXED_ENV)
+        self.commit_output = frozen_id
+        self.list_ids = [frozen_id]
+        self.image_label = None
         destinations = {"ServerFiles": "/home/sdtdserver/serverfiles", "7DaysToDie": "/home/sdtdserver/.local/share/7DaysToDie",
                         "LGSM-Config": "/home/sdtdserver/lgsm/config-lgsm/sdtdserver", "log": "/home/sdtdserver/log",
                         "backups": "/home/sdtdserver/lgsm/backup"}
@@ -31,9 +34,13 @@ class FixtureRunner:
         self.calls.append(args)
         if args[:2] == ["docker", "compose"]: return freeze.CONTAINER
         if args[:2] == ["docker", "inspect"]: return json.dumps([self.ins])
-        if args[:2] == ["docker", "commit"]: return self.frozen_id
+        if args[:2] == ["docker", "commit"]:
+            self.image_label = args[args.index("--change") + 1].split("=", 1)[1]
+            return self.commit_output
+        if args[:3] == ["docker", "image", "ls"]: return "\n".join(self.list_ids)
         if args[:3] == ["docker", "image", "inspect"]:
-            return json.dumps([{"Config": {"Env": [k + "=" + v for k, v in self.image_env.items()]}}])
+            return json.dumps([{"Id": self.frozen_id, "Config": {"Labels": {"org.suzume.preparation": self.image_label},
+                               "Entrypoint": ["/home/sdtdserver/openvpn.sh"], "Env": [k + "=" + v for k, v in self.image_env.items()]}}])
         if args[:3] == ["docker", "image", "save"]:
             shutil.copyfile(self.image, args[args.index("--output") + 1])
             return ""
@@ -133,6 +140,35 @@ class FreezeTest(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(Blocked, "INVALID_PREPARATION_ID"):
                 self.preparer.prepare(value)
         self.assertEqual(self.runner.calls, [])
+
+    def test_commit_output_is_not_trusted_and_all_images_are_required(self):
+        self.runner.commit_output = "human output without an ID"
+        result = self.preparer.prepare(self.job)
+        self.assertEqual(result["frozenImageId"], self.runner.frozen_id)
+        listing = next(c for c in self.runner.calls if c[:3] == ["docker", "image", "ls"])
+        self.assertIn("--all", listing)
+
+    def test_image_id_failure_can_only_resume_existing_unique_matching_image(self):
+        self.runner.list_ids = []
+        with self.assertRaisesRegex(Blocked, "FROZEN_IMAGE_ID_UNAVAILABLE"):
+            self.preparer.prepare(self.job)
+        before = len(self.runner.calls)
+        self.runner.list_ids = [self.runner.frozen_id]
+        self.runner.ins["Mounts"].reverse()
+        result = self.preparer.prepare(self.job, resume_image_id_failure=True)
+        self.assertEqual(result["phase"], "prepared")
+        self.assertFalse(any(c[:2] == ["docker", "commit"] for c in self.runner.calls[before:]))
+        with self.assertRaisesRegex(Blocked, "RESUME_STATE_NOT_SUPPORTED"):
+            self.preparer.prepare(self.job, resume_image_id_failure=True)
+
+    def test_ambiguous_or_mislabelled_images_fail_closed(self):
+        self.runner.list_ids += ["sha256:" + "a" * 64]
+        with self.assertRaisesRegex(Blocked, "FROZEN_IMAGE_ID_UNAVAILABLE"):
+            self.preparer.prepare(self.job)
+        self.runner.list_ids = [self.runner.frozen_id]
+        self.runner.image_label = "wrong"
+        with self.assertRaisesRegex(Blocked, "FROZEN_IMAGE_METADATA_MISMATCH"):
+            self.preparer.prepare(self.job, resume_image_id_failure=True)
 
 
 if __name__ == "__main__": unittest.main()
