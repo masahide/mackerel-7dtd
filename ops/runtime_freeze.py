@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -264,12 +265,66 @@ class RuntimePreparer:
             phase("failed")
             raise Blocked(state["errorCode"]) from None
 
+    def stage_recovery_copy(self, preparation_id):
+        """Restore fixed ServerFiles to a NEW private copy, never live mounts."""
+        if not isinstance(preparation_id, str) or not JOB.fullmatch(preparation_id):
+            raise Blocked("INVALID_PREPARATION_ID")
+        folder = self.root / "upgrade-backups" / ("adapter-preparation-" + preparation_id)
+        if folder.is_symlink() or not folder.is_dir():
+            raise Blocked("PREPARATION_UNAVAILABLE")
+        state = json.loads((folder / "state.json").read_text())
+        if (state.get("preparationId") != preparation_id or state.get("phase") != "prepared"
+                or state.get("steamBuild") != BUILD or state.get("verified") is not False
+                or state.get("runtimeRestored") is not False or state.get("productionEnabled") is not False):
+            raise Blocked("PREPARATION_NOT_VERIFIED_FOR_COPY")
+        destination = folder / "restore-target-copy"
+        record = folder / "copy-rehearsal.json"
+        if destination.exists() or destination.is_symlink() or record.exists():
+            raise Blocked("STAGED_COPY_EXISTS_INSPECT_FIRST")
+        receipt = {"preparationId": preparation_id, "phase": "checking_copy", "createdAt": time.time(),
+                   "filesystemCopyRestored": False, "fullWorldBackup": False,
+                   "verified": False, "runtimeRestored": False, "productionEnabled": False}
+        def phase(value):
+            receipt["phase"] = value
+            atomic_json(record, receipt)
+            self.emit({"preparationId": preparation_id, "phase": value})
+        with self.release_lock():
+            try:
+                phase("checking_copy")
+                self.inspect_live()
+                if (self.checkpoint() != state["staticRuntimeHashes"]
+                        or mod_inventory(self.root) != state["approvedModHashes"]
+                        or self.resolve_frozen_image(preparation_id) != state["frozenImageId"]):
+                    raise Blocked("PREPARATION_SOURCE_CHANGED")
+                image = folder / "runtime-image.tar"
+                payload = folder / "target-serverfiles.tar"
+                if (image.is_symlink() or image.stat().st_size != state["imageBytes"]
+                        or digest(image) != state["imageSha256"] or payload.is_symlink()
+                        or payload.stat().st_size != state["payloadBytes"]):
+                    raise Blocked("PREPARATION_ARCHIVE_CHANGED")
+                if shutil.disk_usage(folder).free < state["payloadBytes"] * 2:
+                    raise Blocked("RECOVERY_COPY_SPACE_UNAVAILABLE")
+                ArchiveStore.validate_image(image, state["frozenImageId"])
+                phase("restoring_target_copy")
+                FrozenTarget(payload, state["payloadSha256"], BUILD, state["approvedModHashes"]).stage_copy(destination)
+                self.inspect_live()
+                if self.checkpoint() != state["staticRuntimeHashes"] or mod_inventory(self.root) != state["approvedModHashes"]:
+                    raise Blocked("PREPARATION_SOURCE_CHANGED")
+                receipt["filesystemCopyRestored"] = True
+                phase("target_copy_restored")
+                return receipt
+            except Exception as error:
+                receipt["errorCode"] = str(error) if isinstance(error, Blocked) else "COPY_REHEARSAL_FAILED"
+                phase("failed")
+                raise Blocked(receipt["errorCode"]) from None
+
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 3 or sys.argv[1] not in ["prepare", "resume-image-id-failure"]:
-            raise Blocked("USE_PREPARE_OR_IMAGE_ID_RESUME_WITH_ID")
-        output = RuntimePreparer(DockerRunner(), emit=lambda data: print(json.dumps(data), flush=True)).prepare(
+        if len(sys.argv) != 3 or sys.argv[1] not in ["prepare", "resume-image-id-failure", "stage-copy"]:
+            raise Blocked("USE_PREPARATION_OPERATION_WITH_ID")
+        preparer = RuntimePreparer(DockerRunner(), emit=lambda data: print(json.dumps(data), flush=True))
+        output = preparer.stage_recovery_copy(sys.argv[2]) if sys.argv[1] == "stage-copy" else preparer.prepare(
             sys.argv[2], resume_image_id_failure=sys.argv[1] == "resume-image-id-failure")
         print(json.dumps(output), flush=True)
     except Blocked as error:

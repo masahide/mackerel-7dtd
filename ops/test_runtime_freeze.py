@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tarfile
@@ -181,6 +182,21 @@ class FreezeTest(unittest.TestCase):
         self.assertFalse(any(c[:2] == ["docker", "commit"] or c[:3] == ["docker", "image", "save"] for c in calls))
         image = self.root / "upgrade-backups" / ("adapter-preparation-" + self.job) / "runtime-image.tar"
         original(image, self.runner.frozen_id)
+
+    @unittest.skipUnless(os.name == "posix", "GNU tar isolated-copy comparison runs in Linux CI")
+    def test_real_copy_restore_preserves_payload_and_cannot_mark_full_backup_or_reuse(self):
+        self.preparer.prepare(self.job)
+        before = len(self.runner.calls)
+        result = self.preparer.stage_recovery_copy(self.job)
+        self.assertTrue(result["filesystemCopyRestored"])
+        self.assertFalse(result["fullWorldBackup"])
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["runtimeRestored"])
+        restored = self.root / "upgrade-backups" / ("adapter-preparation-" + self.job) / "restore-target-copy/ServerFiles"
+        self.assertEqual((restored / "Mods/TrailwatchBridge/Fixture.dll").read_bytes(), b"fixture")
+        self.assertFalse(any(c[:2] == ["docker", "commit"] or "start" in c or "stop" in c for c in self.runner.calls[before:]))
+        with self.assertRaisesRegex(Blocked, "STAGED_COPY_EXISTS_INSPECT_FIRST"):
+            self.preparer.stage_recovery_copy(self.job)
 
 
 if __name__ == "__main__": unittest.main()
