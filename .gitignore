@@ -22,3 +22,4 @@ go.work
 .env
 mackerel-7dtd
 apiserver7dtd/apiserver7dtd
+__pycache__/
