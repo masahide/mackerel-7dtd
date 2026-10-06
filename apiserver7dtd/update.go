@@ -23,6 +23,14 @@ const updateConfirmation = "UPDATE SUZUME"
 var updateKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 var updateVersionPattern = regexp.MustCompile(`^Game version: V \S+`)
 
+type updateHookContextKey struct{}
+
+// Trusted metadata is passed as environment values, never shell arguments. It
+// lets independent operator hooks bind their persistent reservation to this job.
+type updateHookMetadata struct {
+	JobID, CurrentVersion, TargetVersion string
+}
+
 // Build and compatibility information remain part of the strict comparison.
 // Mod output ordering and transport line endings do not identify the game build.
 func normalizeUpdateVersion(output string) (string, error) {
@@ -335,6 +343,7 @@ func (m *updateManager) planHandler(w http.ResponseWriter, r *http.Request) {
 	defer func() { m.mu.Lock(); m.busy = false; m.mu.Unlock() }()
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	ctx = context.WithValue(ctx, updateHookContextKey{}, updateHookMetadata{TargetVersion: m.cfg.UpdateTargetVersion})
 	if _, err := m.runHook(ctx, m.cfg.UpdatePreflightCmd); err != nil {
 		updateError(w, 502, "PRECHECK_FAILED", "Operator update preflight failed")
 		return
@@ -354,6 +363,9 @@ func (m *updateManager) planHandler(w http.ResponseWriter, r *http.Request) {
 		TargetVersion: strings.TrimSpace(m.cfg.UpdateTargetVersion), OnlinePlayers: players, CanExecute: true,
 		Blockers: []string{}, Confirmation: updateConfirmation,
 		Steps: []string{"checking", "stopping", "checking_stopped", "backing_up", "updating", "starting", "verifying"}}
+	if strings.TrimSpace(m.cfg.UpdateFinishCmd) != "" {
+		plan.Steps = append(plan.Steps, "releasing")
+	}
 	if players != 0 {
 		plan.Blockers = append(plan.Blockers, "PLAYERS_ONLINE")
 	}
@@ -534,6 +546,9 @@ func (m *updateManager) execute(job UpdateJob) {
 	defer m.wg.Done()
 	ctx, cancel := context.WithTimeout(m.ctx, m.cfg.UpdateTimeout)
 	defer cancel()
+	ctx = context.WithValue(ctx, updateHookContextKey{}, updateHookMetadata{
+		JobID: job.JobID, CurrentVersion: job.CurrentVersion, TargetVersion: job.TargetVersion,
+	})
 	mutated := false
 	failure := ""
 	var failureDetails map[string]any
@@ -669,6 +684,14 @@ func (m *updateManager) execute(job UpdateJob) {
 		if err == nil {
 			job.ResultVersion = version
 			if version == job.TargetVersion {
+				if strings.TrimSpace(m.cfg.UpdateFinishCmd) != "" {
+					if !phase("releasing") {
+						return
+					}
+					if _, ok := hook(m.cfg.UpdateFinishCmd, "FINISH_FAILED"); !ok {
+						return
+					}
+				}
 				return
 			}
 		}
@@ -754,6 +777,7 @@ func (b *updateOutput) Write(p []byte) (int, error) {
 func (updateShellRunner) Run(ctx context.Context, command string) (ExecResult, error) {
 	res := ExecResult{StartedAt: time.Now().UTC(), ExitCode: -1}
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = updateHookEnvironment(ctx)
 	cmd.WaitDelay = 3 * time.Second
 	var out updateOutput
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
@@ -765,4 +789,24 @@ func (updateShellRunner) Run(ctx context.Context, command string) (ExecResult, e
 		res.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	return res, err
+}
+
+func updateHookEnvironment(ctx context.Context) []string {
+	metadata, _ := ctx.Value(updateHookContextKey{}).(updateHookMetadata)
+	values := map[string]string{
+		"OPSA_UPDATE_JOB_ID":          metadata.JobID,
+		"OPSA_UPDATE_CURRENT_VERSION": metadata.CurrentVersion,
+		"OPSA_UPDATE_TARGET_VERSION":  metadata.TargetVersion,
+	}
+	env := make([]string, 0, len(os.Environ())+len(values))
+	for _, item := range os.Environ() {
+		key, _, _ := strings.Cut(item, "=")
+		if _, reserved := values[key]; !reserved {
+			env = append(env, item)
+		}
+	}
+	for _, key := range []string{"OPSA_UPDATE_JOB_ID", "OPSA_UPDATE_CURRENT_VERSION", "OPSA_UPDATE_TARGET_VERSION"} {
+		env = append(env, key+"="+values[key])
+	}
+	return env
 }

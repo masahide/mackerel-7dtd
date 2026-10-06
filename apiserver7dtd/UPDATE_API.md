@@ -1,5 +1,17 @@
 # SUZUME 更新 API
 
+2026-10-06 の追加実装: 運用コアと未達の有効化条件は [ops/README.md](../ops/README.md) を参照。
+本番へ配置済みの `01a037b7f4dc69f25661826741f871548f9636a6` は更新無効のまま。
+以下の解除hook追加と運用コアは本番未配置で、ゲーム停止・再起動・参加遮断を行っていない。
+
+`OPSA_UPDATE_FINISH_CMD` は任意の固定解除hook。設定時だけ期待版をAPIが検証した後に
+`phase:releasing` で呼び、成功後にジョブを完了する。失敗時は `FINISH_FAILED`、
+`recoveryRequired:true` として保守回復を要求する。運用adapterを有効化するときはこのhookを必須とする。
+各hookにはtrusted環境値 `OPSA_UPDATE_JOB_ID / OPSA_UPDATE_CURRENT_VERSION / OPSA_UPDATE_TARGET_VERSION`
+を渡す。計画のpreflightではjob/currentは空、targetだけを渡す。環境値をshell文字列へ連結せず扱う。
+旧6hook構成は後方互換のため維持する。新たな本番adapterは完全復旧・共通排他・参加制限の
+未検証項目が残るため接続しておらず、生成fixtureのファイル復元をAPI用 `verified:true` と偽らない。
+
 この実装は更新計画、明示確認、永続的な非同期ジョブ、進捗・結果照会を提供する。
 既定では無効。本番の SteamCMD / コンテナ更新コマンドは含めていない。
 

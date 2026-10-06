@@ -154,17 +154,19 @@ type Config struct {
 	AllowNoAuth     bool   `envconfig:"ALLOW_NO_AUTH" default:"false"` // 一時無効化用
 
 	// Update commands are administrator-owned hooks, with no production defaults.
-	UpdateEnabled         bool          `envconfig:"UPDATE_ENABLED" default:"false"`
-	UpdateStateDir        string        `envconfig:"UPDATE_STATE_DIR"`
-	UpdateTargetVersion   string        `envconfig:"UPDATE_TARGET_VERSION"`
-	UpdatePreflightCmd    string        `envconfig:"UPDATE_PREFLIGHT_CMD"`
-	UpdateStopCmd         string        `envconfig:"UPDATE_STOP_CMD"`
-	UpdateCheckStoppedCmd string        `envconfig:"UPDATE_CHECK_STOPPED_CMD"`
-	UpdateBackupCmd       string        `envconfig:"UPDATE_BACKUP_CMD"`
-	UpdateApplyCmd        string        `envconfig:"UPDATE_APPLY_CMD"`
-	UpdateStartCmd        string        `envconfig:"UPDATE_START_CMD"`
-	UpdateTimeout         time.Duration `envconfig:"UPDATE_TIMEOUT" default:"60m"`
-	UpdateVerifyTimeout   time.Duration `envconfig:"UPDATE_VERIFY_TIMEOUT" default:"5m"`
+	UpdateEnabled         bool   `envconfig:"UPDATE_ENABLED" default:"false"`
+	UpdateStateDir        string `envconfig:"UPDATE_STATE_DIR"`
+	UpdateTargetVersion   string `envconfig:"UPDATE_TARGET_VERSION"`
+	UpdatePreflightCmd    string `envconfig:"UPDATE_PREFLIGHT_CMD"`
+	UpdateStopCmd         string `envconfig:"UPDATE_STOP_CMD"`
+	UpdateCheckStoppedCmd string `envconfig:"UPDATE_CHECK_STOPPED_CMD"`
+	UpdateBackupCmd       string `envconfig:"UPDATE_BACKUP_CMD"`
+	UpdateApplyCmd        string `envconfig:"UPDATE_APPLY_CMD"`
+	UpdateStartCmd        string `envconfig:"UPDATE_START_CMD"`
+	// Optional final fence release, called only after the API verifies the target.
+	UpdateFinishCmd     string        `envconfig:"UPDATE_FINISH_CMD"`
+	UpdateTimeout       time.Duration `envconfig:"UPDATE_TIMEOUT" default:"60m"`
+	UpdateVerifyTimeout time.Duration `envconfig:"UPDATE_VERIFY_TIMEOUT" default:"5m"`
 }
 
 // グローバル設定（テスト互換のため維持）

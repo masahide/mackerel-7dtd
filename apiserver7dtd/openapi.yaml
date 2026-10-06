@@ -378,8 +378,8 @@ components:
           x-enum-varnames: [UpdateJobStatusQueued, UpdateJobStatusRunning, UpdateJobStatusSucceeded, UpdateJobStatusFailed, UpdateJobStatusInterrupted]
         phase:
           type: string
-          enum: [queued, checking, stopping, checking_stopped, backing_up, updating, starting, verifying, completed]
-          x-enum-varnames: [UpdateJobPhaseQueued, UpdateJobPhaseChecking, UpdateJobPhaseStopping, UpdateJobPhaseCheckingStopped, UpdateJobPhaseBackingUp, UpdateJobPhaseUpdating, UpdateJobPhaseStarting, UpdateJobPhaseVerifying, UpdateJobPhaseCompleted]
+          enum: [queued, checking, stopping, checking_stopped, backing_up, updating, starting, verifying, releasing, completed]
+          x-enum-varnames: [UpdateJobPhaseQueued, UpdateJobPhaseChecking, UpdateJobPhaseStopping, UpdateJobPhaseCheckingStopped, UpdateJobPhaseBackingUp, UpdateJobPhaseUpdating, UpdateJobPhaseStarting, UpdateJobPhaseVerifying, UpdateJobPhaseReleasing, UpdateJobPhaseCompleted]
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
         finishedAt: {type: string, format: date-time}

@@ -470,6 +470,7 @@
               "updating",
               "starting",
               "verifying",
+              "releasing",
               "completed"
             ],
             "type": "string",
@@ -482,6 +483,7 @@
               "UpdateJobPhaseUpdating",
               "UpdateJobPhaseStarting",
               "UpdateJobPhaseVerifying",
+              "UpdateJobPhaseReleasing",
               "UpdateJobPhaseCompleted"
             ]
           },

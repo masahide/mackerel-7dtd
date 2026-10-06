@@ -34,6 +34,7 @@ const (
 	UpdateJobPhaseCheckingStopped UpdateJobPhase = "checking_stopped"
 	UpdateJobPhaseCompleted       UpdateJobPhase = "completed"
 	UpdateJobPhaseQueued          UpdateJobPhase = "queued"
+	UpdateJobPhaseReleasing       UpdateJobPhase = "releasing"
 	UpdateJobPhaseStarting        UpdateJobPhase = "starting"
 	UpdateJobPhaseStopping        UpdateJobPhase = "stopping"
 	UpdateJobPhaseUpdating        UpdateJobPhase = "updating"
