@@ -169,9 +169,15 @@ class RuntimePreparer:
                 raise Blocked("RESUME_STATE_UNAVAILABLE")
             state = json.loads((folder / "state.json").read_text())
             if (state.get("preparationId") != preparation_id or state.get("phase") != "failed"
-                    or state.get("errorCode") not in ["FROZEN_IMAGE_ID_UNAVAILABLE", "RESUME_LIVE_RUNTIME_CHANGED"]
-                    or state.get("frozenImageId") or state.get("verified") is not False
-                    or any((folder / name).exists() for name in ["runtime-image.tar", "target-serverfiles.tar"])):
+                    or state.get("errorCode") not in ["FROZEN_IMAGE_ID_UNAVAILABLE", "RESUME_LIVE_RUNTIME_CHANGED", "IMAGE_ID_MISMATCH"]
+                    or state.get("verified") is not False or state.get("runtimeRestored") is not False
+                    or state.get("productionEnabled") is not False or (folder / "target-serverfiles.tar").exists()):
+                raise Blocked("RESUME_STATE_NOT_SUPPORTED")
+            if state["errorCode"] == "IMAGE_ID_MISMATCH":
+                image = folder / "runtime-image.tar"
+                if image.is_symlink() or not image.is_file() or not state.get("frozenImageId"):
+                    raise Blocked("RESUME_STATE_NOT_SUPPORTED")
+            elif state.get("frozenImageId") or (folder / "runtime-image.tar").exists():
                 raise Blocked("RESUME_STATE_NOT_SUPPORTED")
         else:
             try:
@@ -216,6 +222,8 @@ class RuntimePreparer:
                     state["recoveredExistingImage"] = True
                     phase("resolving_existing_image")
                 frozen = self.resolve_frozen_image(preparation_id)
+                if state.get("frozenImageId") not in [None, frozen]:
+                    raise Blocked("RESUME_IMAGE_CHANGED")
                 state["frozenImageId"] = frozen
                 state.pop("errorCode", None)
                 phase("checking_frozen_runtime")
@@ -227,7 +235,10 @@ class RuntimePreparer:
                     raise Blocked("FROZEN_START_FLAGS_MISMATCH")
                 phase("saving_runtime_image")
                 image = folder / "runtime-image.tar"
-                self.runner.run(["docker", "image", "save", "--output", str(image), frozen], 1200)
+                if not image.exists():
+                    self.runner.run(["docker", "image", "save", "--output", str(image), frozen], 1200)
+                elif image.is_symlink() or not image.is_file():
+                    raise Blocked("UNSAFE_IMAGE_EXPORT")
                 os.chmod(image, 0o600)
                 ArchiveStore.validate_image(image, frozen)
                 state.update(imageSha256=digest(image), imageBytes=image.stat().st_size)

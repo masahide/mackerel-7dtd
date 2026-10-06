@@ -21,9 +21,22 @@ Mounts 配列の順序だけが変わるため、全要素を Destination 順で
 書き出し済み `runtime-image.tar` は 510,636,032 bytes。
 Docker 29.6.1/containerd image store が OCI layout と Docker manifest を出力した。
 inspect ID は OCI image manifest digest で、config digest とは異なる。
-現行の legacy Docker-save 検証器は config digest を image ID とみなすため
-`IMAGE_ID_MISMATCH` で停止した。OCI manifest/config/blob digest・size、圧縮blob、
-展開後 diffID、tar可読性を検証する実装と試験が必要。照合条件は緩めない。
+旧検証器は config digest を image ID とみなすため `IMAGE_ID_MISMATCH` で停止した。
+検証器を OCI manifest/config/blob digest・size、gzip CRC、展開後 diffID、
+tar可読性の検証へ拡張した。併記された Docker manifest も同一config・layer順序を
+参照する必要がある。旧形式の回帰試験、改竄・外部参照・曖昧なindex・サイズ・
+diffID不一致・破損tar・gzip CRCの失敗試験を追加した。
+
+対応範囲は一つの linux/amd64 runnable OCI manifest、ローカルSHA256 blob、
+未圧縮またはgzip layer。multi-platform/nested index、zstd、未知mediaType、
+外部URLや埋め込みdataは対応を検証していないため拒否する。
+この保守資産検証器は全OCI形式を扱う汎用ツールではない。
+展開後layerは最大8GiB。読取り・ハッシュ・tar解析のみで、展開・実行・取得はしない。
+
+参考: [OCI descriptor](https://github.com/opencontainers/image-spec/blob/main/descriptor.md)、
+[image layout](https://github.com/opencontainers/image-spec/blob/main/image-layout.md)、
+[manifest](https://github.com/opencontainers/image-spec/blob/main/manifest.md)、
+[DiffID](https://github.com/opencontainers/image-spec/blob/main/config.md#layer-diffid)。
 
 現時点で固定 ServerFiles tar は未作成、全復旧・再起動は未検証。
 ゲーム停止・再起動・更新・API有効化・通信変更は未実施。

@@ -170,5 +170,17 @@ class FreezeTest(unittest.TestCase):
         with self.assertRaisesRegex(Blocked, "FROZEN_IMAGE_METADATA_MISMATCH"):
             self.preparer.prepare(self.job, resume_image_id_failure=True)
 
+    def test_image_archive_resume_validates_existing_bytes_without_export_or_commit(self):
+        original = freeze.ArchiveStore.validate_image
+        with patch.object(freeze.ArchiveStore, "validate_image", side_effect=Blocked("IMAGE_ID_MISMATCH")):
+            with self.assertRaisesRegex(Blocked, "IMAGE_ID_MISMATCH"):
+                self.preparer.prepare(self.job)
+        before = len(self.runner.calls)
+        self.preparer.prepare(self.job, resume_image_id_failure=True)
+        calls = self.runner.calls[before:]
+        self.assertFalse(any(c[:2] == ["docker", "commit"] or c[:3] == ["docker", "image", "save"] for c in calls))
+        image = self.root / "upgrade-backups" / ("adapter-preparation-" + self.job) / "runtime-image.tar"
+        original(image, self.runner.frozen_id)
+
 
 if __name__ == "__main__": unittest.main()
