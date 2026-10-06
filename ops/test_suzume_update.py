@@ -247,7 +247,7 @@ class ArchiveTest(unittest.TestCase):
         root.mkdir()
         for name in REQUIRED:
             p = root / name
-            if "." in name: p.write_text("isolated configuration " + name)
+            if name in REQUIRED[4:]: p.write_text("isolated configuration " + name)
             else:
                 p.mkdir()
                 (p / "fixture.bin").write_bytes(b"world/config/mod/executable fixture\0\xff")
@@ -322,7 +322,7 @@ class ArchiveTest(unittest.TestCase):
                 root.mkdir()
                 for name in REQUIRED:
                     p = root / name
-                    if "." in name: p.write_text("isolated")
+                    if name in REQUIRED[4:]: p.write_text("isolated")
                     else:
                         p.mkdir()
                         (p / "fixture").write_text("isolated")
