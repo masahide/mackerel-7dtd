@@ -1,5 +1,22 @@
 # SUZUME 更新運用コア（未有効化）
 
+2026-10-06 16:56 UTC の継続調査: PR #5 はmain `0a37ddd629802abf729d610f96876d6cc5831b57` にマージ済み。
+`runtime_freeze.py` に、観測済みの固定ホスト/root/container/image/Composeのみを対象とする
+復旧資産準備adapterを追加した。現在のコンテナを `--pause=false` で新しいimageに固定し、
+起動時update/MOD update/monitor/backupを新image側だけで無効にする。元のゲームは停止・起動せず、
+ネットワークなし・capability追加なし・read-onlyの検査用コンテナで静的runtimeを比較する。
+ServerFiles/MOD/buildの固定tarとimage exportのhashを検証する。中断/既存IDは再実行せずstate照合を要求する。
+この追加はまだ本番で実行しておらず、模擬5テストのみ実行済み。
+`prepared` は固定資産の準備で、`verified:false / runtimeRestored:false / productionEnabled:false` を維持する。
+
+実際のentrypointは `/home/sdtdserver/openvpn.sh`（VPN起動後にuser.shをexec）。
+固定起動に必要な `START_MODE=1 / UPDATE_MODS=NO` 等の根拠を現物から確認した。
+対象全体は約82GB（うち既存backups約63GB）、空き約919GB。
+停止後の全scopeコピー・展開・比較・固定3.3起動確認は暫定20～40分を見込むが、I/O性能に依存する。
+直前に人数を2ソースで0確認してから停止する。停止後の原本と固定3.3資産は破壊せず保全する。
+ゲーム通信だけのIPv4/IPv6保守遮断（TCP26900、UDP26900-26902、eth0/tun0両経路）と
+再作成後の起動前適用は新規network security変更であり、別承認を得るまで適用・有効化しない。
+
 本番の操作adapterは未接続です。`suzume_update.py` は固定対象検証、永続保守予約、6工程と成功確認後の解除、隔離ファイル復元のコアです。SSH、SteamCMD、Docker、firewallを呼ぶ運用adapterや起動可能な本番hook CLIは提供していません。`suzume-profile.observed.json` は読み取り時の構成記録であり、有効な配置設定ではありません。
 
 現在の本番APIは commit `01a037b7f4dc69f25661826741f871548f9636a6`、`OPSA_UPDATE_ENABLED=false` のままです。この変更を本番へ配置・有効化していません。
