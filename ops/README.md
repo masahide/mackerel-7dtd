@@ -14,10 +14,11 @@ hash、Steam build、全MODファイルhashを検証する。
 `stage-copy` は新規の私有ディレクトリに展開しGNU tarで比較する。
 不確かな既存ディレクトリは再利用しない。
 
-実機で固定資産の準備とServerFilesの展開比較まで完了した。
-`runtime_rehearsal.py` の隔離起動は0人でもワールドが書き換わるためコピー比較で中断した。
-隔離コンテナは作成されていない。[実機記録](OPERATIONAL_VALIDATION.md) と
-[次段階](RECOVERY_REHEARSAL_PLAN.md) を参照。
+実機で固定資産の準備、ServerFilesの展開比較、固定launcherの隔離起動を確認した。
+明示承認された一回の限定保守で正常終了コード0とwriter不在を確認し、静止world/configを保存して本番へ復帰した。
+`rehearse-quiescent` はそのコピーだけを新規領域へ展開・比較し、保存ワールドday848の隔離起動と試行container削除に成功した。
+本番の再停止・更新適用・通信遮断を行わずに検証を完了した。[実機記録](OPERATIONAL_VALIDATION.md) と
+[有効化条件・次工程](RECOVERY_REHEARSAL_PLAN.md) を参照。
 全資産は `verified:false / runtimeRestored:false / productionEnabled:false` のまま。
 
 ## 観測した既存運用
@@ -112,6 +113,12 @@ network=none で EOS の初期化が失敗するため、固定版の `platform.
 V3.3.0 b18 の metadata で確認した Local/None（LAN は server-only）設定を、試行専用ファイルへ限定して使う。
 このファイルだけを read-only bind で重ね、元 ServerFiles コピー・アーカイブ・本番設定は保持する。
 元の Steam/EOS/VPN 経路の復旧確認は、このオフライン起動から証明しない。
+
+`runtime_rehearsal.py rehearse-quiescent <準備ID>` は同一IDの正常完了・復帰記録と静止tarのsize/hashを要求する。
+ServerFilesも新しい試行領域へ展開し、owner/mode/ACL/xattr・全MODを比較する。
+外部save path・曖昧なworld・予約残存を拒否し、全6 bindを起動前に検証する。
+telnet `version/gt/lp` で版・実測保存日day848・0人を確認して初めて `savedWorldBootVerified:true` とする。
+この値をAPI用 `verified:true` や `runtimeRestored:true` に変換しない。完全scope・Steam/EOS/VPN・実ゲームMOD互換性は別の証明が必要。
 
 `python3 -m unittest discover -s ops -v`、`go test ./...`、`go vet ./...`、`go build ./...`。
 Linux CIは実GNU tar、owner/mode/ACL/xattr、flock、復元、破損・競合・重複・中断を検証する。

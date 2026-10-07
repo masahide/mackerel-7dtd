@@ -1,56 +1,59 @@
-# 整合したワールドによる次の復旧試行
+# 更新機能の有効化条件と次工程
 
-2026-10-07時点の提案。以下の本番停止はまだ実施していない。
-オンライン複製は `main.ttw / main.ttw.bak` の変化で不一致になった。
-比較を無視した起動成功は完全復旧の証明にならない。
+2026-10-07 UTC。承認された一回の停止・静止コピー・元ゲーム復帰は完了した。
+コピーの隔離復元は本番を再停止せず進められる。
+管理画面はAPIの `canExecute / blockers / recoveryRequired` を反映し、証明が不足する更新を実行可能と表示しない。
 
-## 停止範囲と事前条件
+## 既存承認内で完了できる作業
 
-最初にゲームprocessだけを正常終了し、静止ワールド/configをコピーする。
-本番へpayloadを適用せず、Compose再作成やDocker restartも行わない。
-既存containerとVPNが維持できることを直前に確認する。
-人数取得から終了までの再参加競合は残り、通信遮断は行わない。
-人数非0・不明・不一致の場合は停止に進まない。
+- 完了記録・SHA256・sizeを照合し、コピーだけを新規領域へ展開してGNU tarと全MOD/buildを検証。
+- 全mount検査後、公開ポートなし・network=noneで保存済みday848を起動し、識別済み試行containerだけを削除。
+- 本番game/cron/VPN/APIが稼働を続けた証拠を残し、PR #6のレビューと既存API契約での画面検証を進める。
 
-既知MOD releaseとのflock、永続保守予約、API/手動操作との重複防止を確保する。
-cronのmonitor/backup、実行中のupdate/backupとの協調が必要。
-この処理を含む本番adapterは未配置であり、復帰までレビューしてから実行する。
-固定プログラムと既存SSH経路を使い、公開HTTPにシェル/パスを追加しない。
+同名試行領域を上書きせず、再試行前には永続receiptと実containerを確認する。
+完成した静止tarを、稼働中worldとの比較結果で上書き・取り直ししない。
 
-## 復帰を含む手順
+## 有効化までの具体的条件
 
-1. 現行container/image/Compose、固定資産、MOD/static runtime/configのhashを再確認。
-   必要config、system SteamCMD、LinuxGSM v24.2.1一致、`updateonstart=off` と
-   上書き設定がないことを確認する。
-2. 親へ停止範囲、未測定の所要時間、復帰手順を報告し、追加保守時間の承認を受ける。
-   停止直前に既存認証でversion・`/serverstats`・`/player` の正確な0人を再確認する。
-   以前の0人を流用しない。
-3. 正常shutdown完了とゲーム・セーブwriter不在を確認。
-   GSM stopはtelnet失敗後にtmux killへ進むため、成功コードだけでclean stopと認めない。
-   正常終了未確認なら適用/バックアップ証明へ進まない。
-4. 私有領域へワールド/configをGNU tarで保存し、静止sourceと比較する。
-   完全scopeの証明には約63GBの過去backups、その他bind、外部VPN設定、
-   container private inspect、固定imageも必要。この短いコピーのみでは完了しない。
-5. 元のServerFiles/configのまま固定GSM launcherを直接startして本番へ復帰する。
-   観測済み候補は `docker exec --user sdtdserver --workdir /home/sdtdserver <固定元container ID> ./sdtdserver start`。
-   上記hash/設定の再確認が条件。install.sh、Compose start/restartを通さない。
-   version/build/MODと既存管理経路で正常稼働を確認する。
-6. 静止時コピーを別ディレクトリへ展開しtarとowner/mode/ACL/xattrを比較。
-   本番復帰後、固定imageとコピーのみで公開ポートなし・network=noneの隔離起動を行う。
-   隔離失敗で本番ファイルを書き戻さず私有logとreceiptを保全する。
+| 条件 | 現状 | 必要な証拠・判断 |
+|---|---|---|
+| 新しい更新先 | 稼働/固定版ともV3.3.0 b18、build25661908 | 新版/build・MODを明示承認、事前取得した固定payloadをhash検証。準備と本番適用は別段階 |
+| 完全backup | 静止world/configとServerFiles/imageのファイル検証まで | 履歴backups/log・全bind・外部VPN設定・container metadataを含むscopeを決定し、独立コピーで復元照合 |
+| 元runtime復旧 | 元containerを維持した固定startは実証済み | container喪失時の再構築、Steam/EOS・OpenVPN・認証経路と必要設定の復元確認 |
+| MOD互換性 | 固定版全ファイルhash、7MODのLoaded記録と保存world起動を確認。本番・隔離双方でTrailwatch QuestStartPatchのUndefined target method例外あり | 既存Trailwatch担当へ例外を引き継ぎ、対象methodとgame版の互換性・実ゲーム動作を検証。Local/LAN起動を完全MOD互換性証明にしない |
+| 排他 | APIのlease/idempotency、限定保守予約・既知release flockを実証 | API・cron/monitor/backup・release・手動操作すべてが同じ予約を尊重するbackendと運用手順 |
+| 参加競合 | 一回の保守で直前API2系統/console0人を確認 | 人数確認からshutdownまでの方針を決定。現Workflowのfence要件を満たすか、承認された代替設計を実装・模擬検証 |
+| 本番hook | コアと管理者CLIのみ、全7hook backend未配置 | 固定backendを実装して失敗/中断/重複/復帰不能を検証。API自身を停止する保守coordinatorを自己実行hookに流用しない |
+| 配置 | 管理APIは無効化 | レビュー済みcommit/binary、固定hook配置/実行ユーザー/権限、私有state dir、target・timeoutを具体化して親へ提出 |
 
-未実装・実機未確認部分があるため、停止前にcron等との協調と固定start CLIを完成させる。
-既存containerが停止・失われた場合は通常restartせず、固定imageと外部VPNを使う
-別の復旧手順が必要。このnetwork=none試行はVPN起動を証明しない。
+ユーザーは今回通信遮断を不要とした。fence証拠を偽造して無人Workflowを通さない。
+新しいnetwork/VPN経路・資格情報・権限、ゲーム再停止/更新適用、API有効化が必要な工程は、具体的対象と影響を親へ報告して承認を待つ。
+今回の既存root SSH/私有CLIを使う保守に新しい資格情報・firewall変更はなかった。
 
-## 時間と中断条件
+## 配置レビューへ渡す内容
 
-約1.4GBのオンラインコピーは作成から比較失敗まで約46秒だったが、
-正常shutdown・復帰・完全scope保存/展開の実測はない。
-全scope約82GBのため停止時間を20〜40分等と保証できない。
-未測定部分を親へ示し、停止時間上限と中断時復帰条件を決めてから実行する。
+公開契約は `POST /server/update/plan`、`POST /server/update/jobs`、`GET /server/update/jobs/{jobId}` と `/latest`。
+ジョブ入力は `planId / confirmation:"UPDATE SUZUME" / idempotencyKey` のみ。
+任意shell/path/target URLをクライアントから受け付けず、既存認証を維持する。
 
-版/hash変化、人数非0/不明、排他喪失、強制終了、writer残存、コピー不一致、
-資源不足、固定start失敗が中断条件。自動rollback/再試行/有効化は行わない。
-管理画面の更新を安全に使えると報告するには、完全復旧証明、実target、
-全hook・排他方針・配置のレビューまで必要。
+配置案では `OPSA_UPDATE_ENABLED=false` の状態で固定hookを検査し、`OPSA_UPDATE_TARGET_VERSION / OPSA_UPDATE_STATE_DIR`、
+各hookの配置・実行ユーザー・timeoutを明記する。環境変数名は `apiserver7dtd/main.go` のConfigを正とする。
+任意 `OPSA_UPDATE_FINISH_CMD` はAPIの新版確認後に実行し、失敗時は予約と `recoveryRequired:true` を維持する。
+既存配置済みbinaryにはこのPRのfinish拡張をまだ反映していない。PR merge/本番有効化は今回の作業に含めない。
+
+APIのbackup receipt `{backupId,verified:true}` は完全復元証拠が成立した場合だけ返す。
+今回の `sourceQuiescent:true / savedWorldBootVerified:true` は個別の事実であり、API receiptや `runtimeRestored:true` に変換しない。
+
+## 中断・復帰
+
+限定保守は実行済みなので `collect` を繰り返さない。private `status <準備ID>` で永続状態とworkerを読み取り、
+`completed / gameReturned:true / recoveryRequired:false` と実game/cron/APIを照合する。
+新たな異常では保存状態・PID/start token・固定資産を先に確認し、無関係processをkillしない。
+
+未復帰の限定保守のprivate `recover` は同じ予約だけを対象に固定復帰する。
+正常終了不明ならpayloadへ進まず、元containerの通常restartもしない。
+通常entrypointには最新版/MOD取得が含まれるため、復帰は検証済み固定GSM startと設定確認が必要。
+元container喪失は今回未検証の独立runtime復元に該当する。
+
+将来のupdate失敗でも自動rollback/盲目的再試行をせず、実game状態・save進行・backup時点・復元証拠をoperatorが確認する。
+保守時間は実測から範囲を提示し、約82GB全scopeの保存/展開やVPN復元の所要時間を推定だけで約束しない。
