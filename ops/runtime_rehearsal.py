@@ -96,7 +96,8 @@ class OfflineBootRehearsal:
             raise Blocked("TRIAL_EXISTS_INSPECT_STATE_FIRST") from None
         receipt = {"preparationId": preparation_id, "phase": "checking", "createdAt": time.time(),
                    "offlineBootVerified": False, "fullWorldBackup": False, "verified": False,
-                   "runtimeRestored": False, "productionEnabled": False}
+                   "runtimeRestored": False, "productionEnabled": False,
+                   "startAttempted": False, "cleanupRequired": False}
         def phase(value):
             receipt.update(phase=value, updatedAt=time.time())
             atomic_json(trial_root / "receipt.json", receipt)
@@ -133,7 +134,15 @@ class OfflineBootRehearsal:
                 self.runner.run(["tar", "--acls", "--xattrs", "--numeric-owner", "-cpf", str(archive),
                                  "-C", str(p.root), "7DaysToDie", "LGSM-Config"], 300)
                 archive.chmod(0o600)
-                self.runner.run(["tar", "--acls", "--xattrs", "--compare", "--file", str(archive), "-C", str(p.root)], 300)
+                phase("comparing_online_source")
+                try:
+                    self.runner.run(["tar", "--acls", "--xattrs", "--compare", "--file", str(archive), "-C", str(p.root)], 300)
+                except Blocked:
+                    # Even zero players does not stop periodic world writes.
+                    # A failed comparison cannot become a recovery proof.
+                    raise Blocked("ONLINE_COPY_NOT_MATCHED") from None
+                receipt["onlineSourceCompared"] = True
+                phase("restoring_online_copy")
                 archive_members(archive, allowed=("7DaysToDie", "LGSM-Config"))
                 self.runner.run(["tar", "--acls", "--xattrs", "--numeric-owner", "--same-owner", "--same-permissions",
                                  "-xpf", str(archive), "-C", str(trial_root)], 300)
@@ -156,6 +165,7 @@ class OfflineBootRehearsal:
                     args += ["--mount", "type=bind,source=" + str(source) + ",target=" + target]
                 args.append(state["frozenImageId"])
                 self.require_resource_capacity()
+                receipt.update(startAttempted=True, cleanupRequired=True)
                 phase("starting_offline_trial")
                 start_attempted = True
                 self.runner.run(args, 60)
@@ -183,6 +193,7 @@ class OfflineBootRehearsal:
                     raise Blocked("PREPARATION_SOURCE_CHANGED")
                 phase("offline_game_verified")
             except Exception as error:
+                receipt["failedPhase"] = receipt["phase"]
                 receipt["errorCode"] = str(error) if isinstance(error, Blocked) else "TRIAL_FAILED"
                 phase("failed")
             finally:
@@ -195,22 +206,30 @@ class OfflineBootRehearsal:
                         receipt["cleanupRequired"] = True
                         atomic_json(trial_root / "receipt.json", receipt)
                 if cid:
-                    self.inspect_trial(name, preparation_id, state["frozenImageId"])
                     try:
-                        logs = self.runner.run(["docker", "logs", "--tail", "200", cid], 30)
-                        log_path = trial_root / "container-log.private.txt"
-                        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                        with os.fdopen(fd, "w", encoding="utf-8") as f:
-                            f.write(logs)
-                    except (Blocked, OSError):
-                        receipt["privateLogsSaved"] = False
-                    self.runner.run(["docker", "stop", "--time", "90", cid], 120)
-                    _, stopped = self.inspect_trial(name, preparation_id, state["frozenImageId"])
-                    if stopped["State"].get("Status") != "exited":
-                        raise Blocked("TRIAL_CLEANUP_NOT_VERIFIED")
-                    self.runner.run(["docker", "container", "rm", cid], 30)
-                    receipt["trialRemoved"] = True
+                        self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                        try:
+                            logs = self.runner.run(["docker", "logs", "--tail", "200", cid], 30)
+                            log_path = trial_root / "container-log.private.txt"
+                            fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                                f.write(logs)
+                            receipt["privateLogsSaved"] = True
+                        except (Blocked, OSError):
+                            receipt["privateLogsSaved"] = False
+                        self.runner.run(["docker", "stop", "--time", "90", cid], 120)
+                        _, stopped = self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                        if stopped["State"].get("Status") != "exited":
+                            raise Blocked("TRIAL_CLEANUP_NOT_VERIFIED")
+                        self.runner.run(["docker", "container", "rm", cid], 30)
+                        receipt.update(trialRemoved=True, cleanupRequired=False)
+                    except Exception as error:
+                        receipt["cleanupErrorCode"] = str(error) if isinstance(error, Blocked) else "TRIAL_CLEANUP_FAILED"
+                        receipt.setdefault("errorCode", "TRIAL_CLEANUP_FAILED")
+                        receipt["phase"] = "failed"
                     atomic_json(trial_root / "receipt.json", receipt)
+        if receipt.get("cleanupErrorCode"):
+            raise Blocked("TRIAL_CLEANUP_FAILED")
         if receipt.get("errorCode"):
             raise Blocked(receipt["errorCode"])
         return receipt

@@ -84,6 +84,9 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.mem_total, self.mem_available = 16 * 1024**3, 12 * 1024**3
         self.trial_id = "e" * 64
         self.start_failure = False
+        self.change_online_world = False
+        self.cleanup_failure = None
+        self.logs_failure = False
         original_run = f.runner.run
         def run(args, timeout=1800):
             self.calls.append(args)
@@ -98,16 +101,24 @@ class OfflineRehearsalTest(unittest.TestCase):
                                    "HostConfig": {"NetworkMode": "none", "RestartPolicy": {"Name": "no"}},
                                    "State": {"Status": self.status, "OOMKilled": False}}])
             if args[:3] == ["docker", "exec", self.trial_id] and args[-1] == PROBE: return json.dumps({"gameVersion": self.probe_version})
-            if args[:2] == ["docker", "logs"]: return "fixture-private-log"
+            if args[:2] == ["docker", "logs"]:
+                if self.logs_failure: raise Blocked("MOCK_LOG_READ_FAILED")
+                return "fixture-private-log"
             if args[:2] == ["docker", "stop"]:
                 self.assertEqual(args[-1], self.trial_id)
+                if self.cleanup_failure == "stop": raise Blocked("MOCK_STOP_REPLY_LOST")
                 self.status = "exited"
                 return ""
             if args[:3] == ["docker", "container", "rm"]:
                 self.assertEqual(args[-1], self.trial_id)
+                if self.cleanup_failure == "remove": raise Blocked("MOCK_REMOVE_REPLY_LOST")
                 return ""
             if args[0] == "tar":
-                subprocess.run(args, check=True, capture_output=True)
+                if (self.change_online_world and "--compare" in args and args[-1] == str(f.root)
+                        and any(value.endswith("online-world-config.tar") for value in args)):
+                    (f.root / "7DaysToDie/fixture.txt").write_text("world changed while zero players")
+                if subprocess.run(args, capture_output=True).returncode:
+                    raise Blocked("PREPARATION_COMMAND_FAILED")
                 return ""
             return original_run(args, timeout)
         f.runner.run = run
@@ -117,6 +128,8 @@ class OfflineRehearsalTest(unittest.TestCase):
         result = self.trial.run(self.fixture.job)
         self.assertTrue(result["offlineBootVerified"])
         self.assertTrue(result["trialRemoved"])
+        self.assertFalse(result["cleanupRequired"])
+        self.assertTrue(result["privateLogsSaved"])
         for key in ["verified", "fullWorldBackup", "runtimeRestored", "productionEnabled"]: self.assertFalse(result[key])
         start = next(c for c in self.calls if c[:3] == ["docker", "run", "--detach"])
         self.assertIn("none", start)
@@ -137,6 +150,54 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.mem_available = 3 * 1024**3
         with self.assertRaisesRegex(Blocked, "TRIAL_RESOURCE_CAPACITY_UNAVAILABLE"): self.trial.run(self.fixture.job)
         self.assertFalse(any(c[:3] == ["docker", "run", "--detach"] for c in self.calls))
+
+    def receipt(self):
+        folder = self.fixture.root / "upgrade-backups" / ("adapter-preparation-" + self.fixture.job) / "offline-runtime-trial"
+        return json.loads((folder / "receipt.json").read_text())
+
+    def test_online_world_change_stops_before_boot_and_preserves_failure_phase(self):
+        self.change_online_world = True
+        with self.assertRaisesRegex(Blocked, "ONLINE_COPY_NOT_MATCHED"): self.trial.run(self.fixture.job)
+        self.assertFalse(any(c[:3] == ["docker", "run", "--detach"] for c in self.calls))
+        result = self.receipt()
+        self.assertEqual(result["failedPhase"], "comparing_online_source")
+        self.assertFalse(result["startAttempted"])
+        self.assertFalse(result["cleanupRequired"])
+        self.assertFalse(result["verified"])
+
+    def assert_cleanup_failure(self, failure):
+        self.cleanup_failure = failure
+        with self.assertRaisesRegex(Blocked, "TRIAL_CLEANUP_FAILED"): self.trial.run(self.fixture.job)
+        result = self.receipt()
+        self.assertTrue(result["offlineBootVerified"])
+        self.assertTrue(result["cleanupRequired"])
+        self.assertIn("cleanupErrorCode", result)
+        self.assertEqual(result["phase"], "failed")
+        for call in self.calls:
+            if call[:2] == ["docker", "stop"] or call[:3] == ["docker", "container", "rm"]:
+                self.assertNotEqual(call[-1], CONTAINER)
+
+    def test_failed_stop_is_durable_and_never_targets_live(self):
+        self.assert_cleanup_failure("stop")
+
+    def test_failed_removal_is_durable_and_never_targets_live(self):
+        self.assert_cleanup_failure("remove")
+
+    def test_log_failure_does_not_prevent_trial_cleanup(self):
+        self.logs_failure = True
+        result = self.trial.run(self.fixture.job)
+        self.assertFalse(result["privateLogsSaved"])
+        self.assertTrue(result["trialRemoved"])
+        self.assertFalse(result["cleanupRequired"])
+
+    def test_original_failure_is_retained_when_cleanup_also_fails(self):
+        self.probe_version = "Game version: unknown"
+        self.cleanup_failure = "stop"
+        with self.assertRaisesRegex(Blocked, "TRIAL_CLEANUP_FAILED"): self.trial.run(self.fixture.job)
+        result = self.receipt()
+        self.assertEqual(result["errorCode"], "TRIAL_VERSION_MISMATCH")
+        self.assertEqual(result["cleanupErrorCode"], "MOCK_STOP_REPLY_LOST")
+        self.assertTrue(result["cleanupRequired"])
 
     def test_lost_start_reply_cleans_up_only_identified_trial(self):
         self.start_failure = True
