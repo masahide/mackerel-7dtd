@@ -90,6 +90,25 @@ rollbackは自動実行せず、セーブ進行と復旧条件を確認してope
 
 ## 検証
 
+`limited_maintenance.py` は承認済みの一回限りの停止・静止コピー・固定版復帰を行う管理者 CLI。
+`verify/collect/recover <準備ID>` のみを受け付け、公開 HTTP hook には接続しない。
+停止前に既存 API の `/serverstats` と `/player`、直前の固定 telnet `version/lp` を照合し、
+0 人を確認できない場合は停止しない。正常な game 終了コードと writer 不在を確認してから
+ワールド/config をコピーする。元 container/VPN と固定 ServerFiles は保持し、直接 GSM start で戻す。
+cron は PID/start token と元 crontab hash を保存して一時停止し、復帰を確認する。
+永続予約と既知 release flock を保持し、途中切断後も `recover` で復帰できる。
+
+`receiver_maintenance.py` は既存 root SSH 経路専用の固定 coordinator。
+`stage` は root 所有の非公開コードと既存資格情報を SSH stdin 経由で配置し、読み取り確認だけ行う。
+`collect` は管理 API を一時停止してその変更操作を抑止し、切断で終了しない固定 worker を起動する。
+ゲーム・cron の復帰確認後だけ同一管理 API を再開する。不明時は API を抑止したまま予約を残す。
+`status/recover` で保存結果の確認と復帰を行う。ネットワーク規則、資格情報、unit 設定は変更しない。
+
+隔離起動は OCI config だけを変更した別イメージを使用する。元の復旧 image/archive は保持し、
+全 layer と静的 runtime の同一性を検証する。継承された VOLUME/EXPOSE/Compose と
+`desktop.docker.io/` の bind 情報を除き、作成後の全 mount が私有コピーと一致する場合だけ起動する。
+`check-start` は固定起動確認に限り、オンラインコピーの整合性や完全復旧の証明には使わない。
+
 `python3 -m unittest discover -s ops -v`、`go test ./...`、`go vet ./...`、`go build ./...`。
 Linux CIは実GNU tar、owner/mode/ACL/xattr、flock、復元、破損・競合・重複・中断を検証する。
 WindowsではPOSIX/GNU tar部分をskipしportableなhash/archive/probeを検証する。
