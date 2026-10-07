@@ -97,7 +97,7 @@ class OfflineRehearsalTest(unittest.TestCase):
                                    "Config": {"Labels": {"org.suzume.rehearsal": f.job}},
                                    "HostConfig": {"NetworkMode": "none", "RestartPolicy": {"Name": "no"}},
                                    "State": {"Status": self.status, "OOMKilled": False}}])
-            if args[:3] == ["docker", "exec", self.trial_id]: return json.dumps({"gameVersion": self.probe_version})
+            if args[:3] == ["docker", "exec", self.trial_id] and args[-1] == PROBE: return json.dumps({"gameVersion": self.probe_version})
             if args[:2] == ["docker", "logs"]: return "fixture-private-log"
             if args[:2] == ["docker", "stop"]:
                 self.assertEqual(args[-1], self.trial_id)
