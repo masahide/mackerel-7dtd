@@ -62,6 +62,28 @@ class OfflineBootRehearsal:
                 or type(memory.get("memoryAvailable")) is not int or memory["memoryAvailable"] < 8 * 1024**3):
             raise Blocked("TRIAL_RESOURCE_CAPACITY_UNAVAILABLE")
 
+    def resolve_trial_image(self, folder, state, preparation_id):
+        receipt = json.loads((folder / "isolated-image.json").read_text())
+        image = receipt.get("trialImageId", "")
+        if (receipt.get("phase") != "isolated_image_prepared" or receipt.get("sourceImageId") != state["frozenImageId"]
+                or receipt.get("layersIdentical") is not True or receipt.get("staticRuntimeIdentical") is not True
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", image)):
+            raise Blocked("ISOLATED_IMAGE_NOT_PREPARED")
+        archive = folder / "isolated-trial-image.tar"
+        if digest(archive) != receipt.get("archiveSha256"):
+            raise Blocked("ISOLATED_IMAGE_ARCHIVE_CHANGED")
+        ArchiveStore.validate_image(archive, image)
+        metadata = json.loads(self.runner.run(["docker", "image", "inspect", image], 30))[0]
+        cfg = metadata.get("Config") or {}
+        labels = cfg.get("Labels") or {}
+        if (metadata.get("Id") != image or cfg.get("Volumes") or cfg.get("ExposedPorts")
+                or labels.get("org.suzume.runtime-trial") != preparation_id
+                or any(key.startswith(("com.docker.compose.", "desktop.docker.io.")) for key in labels)):
+            raise Blocked("ISOLATED_IMAGE_METADATA_CHANGED")
+        if self.preparer.checkpoint(image) != state["staticRuntimeHashes"]:
+            raise Blocked("ISOLATED_RUNTIME_CHANGED")
+        return image
+
     def inspect_trial(self, name, preparation_id, image):
         values = json.loads(self.runner.run(["docker", "inspect", name], 30))
         if len(values) != 1:
@@ -113,6 +135,7 @@ class OfflineBootRehearsal:
             self.emit({"preparationId": preparation_id, "phase": value})
         name = ("suzume-offline-check-" if mode == "online" else "suzume-start-check-") + preparation_id
         cid, start_attempted = None, False
+        runtime_image = state["frozenImageId"]
         with p.release_lock():
             try:
                 phase("checking")
@@ -129,6 +152,9 @@ class OfflineBootRehearsal:
                 if digest(image) != state["imageSha256"]:
                     raise Blocked("PREPARATION_ARCHIVE_CHANGED")
                 ArchiveStore.validate_image(image, state["frozenImageId"])
+                if mode == "check-start":
+                    runtime_image = self.resolve_trial_image(folder, state, preparation_id)
+                    receipt["trialImageId"] = runtime_image
                 # ServerFiles already restored and compared. The online Save and
                 # config copy is NOT labelled a quiescent or complete backup.
                 server = folder / "restore-target-copy/ServerFiles"
@@ -183,15 +209,16 @@ class OfflineBootRehearsal:
                 for source, target in mounts:
                     args += ["--mount", "type=bind,source=" + str(source) + ",target=" + target]
                 self.expected_mounts = {target: ("bind", str(source)) for source, target in mounts}
-                args.append(state["frozenImageId"])
+                args.append(runtime_image)
                 if mode == "check-start":
                     args.append("infinity")
+                atomic_json(trial_root / "creation-input.private.json", {"dockerArgs": args, "expectedMounts": self.expected_mounts})
                 self.require_resource_capacity()
                 receipt.update(startAttempted=True, cleanupRequired=True)
                 phase("starting_offline_trial")
                 start_attempted = True
                 self.runner.run(args, 60)
-                cid, _ = self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                cid, _ = self.inspect_trial(name, preparation_id, runtime_image)
                 receipt["trialContainerId"] = cid
                 # Verify all mounts/ports before any entrypoint or game executes.
                 self.runner.run(["docker", "start", cid], 60)
@@ -202,7 +229,7 @@ class OfflineBootRehearsal:
                 phase("waiting_for_offline_game")
                 deadline = time.monotonic() + 180
                 while time.monotonic() < deadline:
-                    _, ins = self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                    _, ins = self.inspect_trial(name, preparation_id, runtime_image)
                     if ins["State"].get("Status") != "running" or ins["State"].get("OOMKilled"):
                         raise Blocked("TRIAL_EXITED_OR_OOM")
                     try:
@@ -229,13 +256,13 @@ class OfflineBootRehearsal:
                 # No rm -rf, live mount changes, or commands to the live game.
                 if start_attempted and cid is None:
                     try:
-                        cid, _ = self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                        cid, _ = self.inspect_trial(name, preparation_id, runtime_image)
                     except Blocked:
                         receipt["cleanupRequired"] = True
                         atomic_json(trial_root / "receipt.json", receipt)
                 if cid:
                     try:
-                        self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                        self.inspect_trial(name, preparation_id, runtime_image)
                         try:
                             logs = self.runner.run(["docker", "logs", "--tail", "200", cid], 30)
                             log_path = trial_root / "container-log.private.txt"
@@ -246,7 +273,7 @@ class OfflineBootRehearsal:
                         except (Blocked, OSError):
                             receipt["privateLogsSaved"] = False
                         self.runner.run(["docker", "stop", "--time", "90", cid], 120)
-                        _, stopped = self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                        _, stopped = self.inspect_trial(name, preparation_id, runtime_image)
                         if stopped["State"].get("Status") != "exited":
                             raise Blocked("TRIAL_CLEANUP_NOT_VERIFIED")
                         self.runner.run(["docker", "container", "rm", cid], 30)

@@ -174,7 +174,8 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.change_online_world = True
         with self.assertRaisesRegex(Blocked, "ONLINE_COPY_NOT_MATCHED"): self.trial.run(self.fixture.job)
         self.change_online_world = False
-        result = self.trial.run(self.fixture.job, mode="check-start")
+        with patch.object(self.trial, "resolve_trial_image", return_value=self.fixture.runner.frozen_id):
+            result = self.trial.run(self.fixture.job, mode="check-start")
         self.assertTrue(result["offlineBootVerified"])
         self.assertEqual(result["purpose"], "fixed_start_only")
         self.assertFalse(result["onlineSourceCompared"])
