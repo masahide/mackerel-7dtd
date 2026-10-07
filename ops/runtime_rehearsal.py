@@ -12,7 +12,7 @@ import sys
 import time
 
 from runtime_freeze import BUILD, CONTAINER, DockerRunner, ROOT, RuntimePreparer, mod_inventory
-from suzume_update import ArchiveStore, Blocked, JOB, archive_members, atomic_json, digest
+from suzume_update import ArchiveStore, Blocked, FrozenTarget, JOB, archive_members, atomic_json, digest
 
 TARGET = "Game version: V 3.3.0 (b18) Compatibility Version: V 3.3.0"
 MEMORY_PROBE = "import json,pathlib; m=dict(line.split(':',1) for line in pathlib.Path('/proc/meminfo').read_text().splitlines()); print(json.dumps({'memoryAvailable':int(m['MemAvailable'].split()[0])*1024}))"
@@ -90,7 +90,10 @@ class OfflineBootRehearsal:
                 or state.get("verified") is not False or copied.get("verified") is not False):
             raise Blocked("TRIAL_ASSETS_NOT_PREPARED")
         trial_root = folder / "offline-runtime-trial"
-        trial_root.mkdir(mode=0o700)  # Never retry/reuse an uncertain trial.
+        try:
+            trial_root.mkdir(mode=0o700)  # Never retry/reuse an uncertain trial.
+        except FileExistsError:
+            raise Blocked("TRIAL_EXISTS_INSPECT_STATE_FIRST") from None
         receipt = {"preparationId": preparation_id, "phase": "checking", "createdAt": time.time(),
                    "offlineBootVerified": False, "fullWorldBackup": False, "verified": False,
                    "runtimeRestored": False, "productionEnabled": False}
@@ -99,7 +102,7 @@ class OfflineBootRehearsal:
             atomic_json(trial_root / "receipt.json", receipt)
             self.emit({"preparationId": preparation_id, "phase": value})
         name = "suzume-offline-check-" + preparation_id
-        cid = None
+        cid, start_attempted = None, False
         with p.release_lock():
             try:
                 phase("checking")
@@ -119,6 +122,9 @@ class OfflineBootRehearsal:
                 # ServerFiles already restored and compared. The online Save and
                 # config copy is NOT labelled a quiescent or complete backup.
                 server = folder / "restore-target-copy/ServerFiles"
+                payload = folder / "target-serverfiles.tar"
+                FrozenTarget(payload, state["payloadSha256"], BUILD, state["approvedModHashes"]).verify()
+                self.runner.run(["tar", "--acls", "--xattrs", "--compare", "--file", str(payload), "-C", str(server.parent)], 300)
                 if (server.is_symlink() or mod_inventory(server.parent) != state["approvedModHashes"]
                         or digest(server / "7DaysToDieServer.x86_64") != digest(p.root / "ServerFiles/7DaysToDieServer.x86_64")):
                     raise Blocked("TRIAL_TARGET_COPY_CHANGED")
@@ -151,6 +157,7 @@ class OfflineBootRehearsal:
                 args.append(state["frozenImageId"])
                 self.require_resource_capacity()
                 phase("starting_offline_trial")
+                start_attempted = True
                 self.runner.run(args, 60)
                 cid, _ = self.inspect_trial(name, preparation_id, state["frozenImageId"])
                 receipt["trialContainerId"] = cid
@@ -181,8 +188,22 @@ class OfflineBootRehearsal:
             finally:
                 # Mutators only act on the newly created, fully identified trial.
                 # No rm -rf, live mount changes, or commands to the live game.
+                if start_attempted and cid is None:
+                    try:
+                        cid, _ = self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                    except Blocked:
+                        receipt["cleanupRequired"] = True
+                        atomic_json(trial_root / "receipt.json", receipt)
                 if cid:
                     self.inspect_trial(name, preparation_id, state["frozenImageId"])
+                    try:
+                        logs = self.runner.run(["docker", "logs", "--tail", "200", cid], 30)
+                        log_path = trial_root / "container-log.private.txt"
+                        fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(fd, "w", encoding="utf-8") as f:
+                            f.write(logs)
+                    except (Blocked, OSError):
+                        receipt["privateLogsSaved"] = False
                     self.runner.run(["docker", "stop", "--time", "90", cid], 120)
                     _, stopped = self.inspect_trial(name, preparation_id, state["frozenImageId"])
                     if stopped["State"].get("Status") != "exited":

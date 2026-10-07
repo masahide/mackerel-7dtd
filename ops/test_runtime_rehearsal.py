@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import subprocess
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -76,21 +77,28 @@ class OfflineRehearsalTest(unittest.TestCase):
         (f.root / "ServerFiles/7DaysToDieServer.x86_64").write_bytes(b"fixture game executable")
         f.preparer.prepare(f.job)
         f.preparer.stage_recovery_copy(f.job)
+        space = patch("runtime_rehearsal.shutil.disk_usage", return_value=SimpleNamespace(free=1024**4))
+        space.start()
+        self.addCleanup(space.stop)
         self.calls, self.status, self.probe_version = [], "running", TARGET
         self.mem_total, self.mem_available = 16 * 1024**3, 12 * 1024**3
         self.trial_id = "e" * 64
+        self.start_failure = False
         original_run = f.runner.run
         def run(args, timeout=1800):
             self.calls.append(args)
             if args[:2] == ["docker", "info"]: return json.dumps({"MemTotal": self.mem_total, "NCPU": 8})
             if args[-1] == MEMORY_PROBE: return json.dumps({"memoryAvailable": self.mem_available})
-            if args[:3] == ["docker", "run", "--detach"]: return self.trial_id
+            if args[:3] == ["docker", "run", "--detach"]:
+                if self.start_failure: raise Blocked("MOCK_START_REPLY_LOST")
+                return self.trial_id
             if args[:2] == ["docker", "inspect"] and args[2] != CONTAINER:
                 return json.dumps([{"Id": self.trial_id, "Image": f.runner.frozen_id,
                                    "Config": {"Labels": {"org.suzume.rehearsal": f.job}},
                                    "HostConfig": {"NetworkMode": "none", "RestartPolicy": {"Name": "no"}},
                                    "State": {"Status": self.status, "OOMKilled": False}}])
             if args[:3] == ["docker", "exec", self.trial_id]: return json.dumps({"gameVersion": self.probe_version})
+            if args[:2] == ["docker", "logs"]: return "fixture-private-log"
             if args[:2] == ["docker", "stop"]:
                 self.assertEqual(args[-1], self.trial_id)
                 self.status = "exited"
@@ -129,6 +137,19 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.mem_available = 3 * 1024**3
         with self.assertRaisesRegex(Blocked, "TRIAL_RESOURCE_CAPACITY_UNAVAILABLE"): self.trial.run(self.fixture.job)
         self.assertFalse(any(c[:3] == ["docker", "run", "--detach"] for c in self.calls))
+
+    def test_lost_start_reply_cleans_up_only_identified_trial(self):
+        self.start_failure = True
+        with self.assertRaisesRegex(Blocked, "MOCK_START_REPLY_LOST"): self.trial.run(self.fixture.job)
+        self.assertEqual(self.status, "exited")
+        self.assertTrue(any(c[:3] == ["docker", "container", "rm"] for c in self.calls))
+
+    def test_ambiguous_live_identity_retains_recovery_without_stop(self):
+        self.trial_id = CONTAINER
+        with self.assertRaisesRegex(Blocked, "TRIAL_IDENTITY_MISMATCH"): self.trial.run(self.fixture.job)
+        self.assertFalse(any(c[:2] == ["docker", "stop"] for c in self.calls))
+        folder = self.fixture.root / "upgrade-backups" / ("adapter-preparation-" + self.fixture.job) / "offline-runtime-trial"
+        self.assertTrue(json.loads((folder / "receipt.json").read_text())["cleanupRequired"])
 
 
 if __name__ == "__main__": unittest.main()
