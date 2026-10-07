@@ -23,6 +23,8 @@ class TrialImageTest(unittest.TestCase):
             config['config']={'Volumes':{'/game/':{}},'ExposedPorts':{'26900/tcp':{}},
                 'Env':[k+'='+v for k,v in flags.items()]+['API_SECRET=fixture-private'],
                 'Labels':{'com.docker.compose.project':'production','desktop.docker.io/wsl-distro':'fixture',
+                    'desktop.docker.io/binds/0/Source':'/production/ServerFiles','desktop.docker.io/binds/0/Target':'/game',
+                    'desktop.docker.io/binds/0/SourceKind':'bind','desktop.docker.io/ports/26900/tcp':'published',
                     'org.suzume.preparation':self.job,'keep':'metadata'},'Entrypoint':['/vpn.sh']}
         entries,self.image_id,_,self.layer_id=oci_entries(change_config=settings)
         write_archive(self.source,entries)
@@ -43,7 +45,7 @@ class TrialImageTest(unittest.TestCase):
         self.assertNotIn('Volumes',settings);self.assertNotIn('ExposedPorts',settings)
         self.assertEqual(settings['Entrypoint'],['/bin/sleep']);self.assertEqual(settings['Cmd'],['infinity'])
         self.assertEqual(settings['Labels']['org.suzume.source-image'],self.image_id)
-        self.assertFalse(any(k.startswith(('com.docker.compose.','desktop.docker.io.')) for k in settings['Labels']))
+        self.assertFalse(any(k.startswith(('com.docker.compose.','desktop.docker.io/','desktop.docker.io.')) for k in settings['Labels']))
         self.assertNotIn('org.suzume.preparation',settings['Labels'])
         self.assertIn('API_SECRET=fixture-private',settings['Env'])
 

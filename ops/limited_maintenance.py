@@ -203,6 +203,7 @@ class LiveBackend:
                 or result['conflicts'] or result['crontabSha256']!=CRONTAB_SHA):
             raise Blocked('EXISTING_OPERATIONS_NOT_QUIESCENT')
         self.probe(zero=True)
+        self.inspect_pane() # Prove the exit-observation/recovery command before stopping.
         return result
 
     def release_lock(self):return self.p.release_lock()

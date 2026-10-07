@@ -37,7 +37,7 @@ def derivative_archive(source, source_id, job, destination):
         settings.pop('Volumes',None);settings.pop('ExposedPorts',None)
         labels=settings.get('Labels') or {}
         settings['Labels']={key:value for key,value in labels.items()
-            if not key.startswith(('com.docker.compose.','desktop.docker.io.')) and key!='org.suzume.preparation'}
+            if not key.startswith(('com.docker.compose.','desktop.docker.io/','desktop.docker.io.')) and key!='org.suzume.preparation'}
         settings['Labels'].update({'org.suzume.runtime-trial':job,'org.suzume.source-image':source_id})
         settings.update(Entrypoint=['/bin/sleep'],Cmd=['infinity'])
         config_data=encode(config);config_id=sha(config_data)
@@ -84,7 +84,7 @@ def prepare(preparer,job):
             cfg=image['Config']
             if (image['Id']!=image_id or image['RootFS']!=original['RootFS'] or cfg.get('Volumes') or cfg.get('ExposedPorts')
                     or cfg.get('Labels',{}).get('org.suzume.runtime-trial')!=job
-                    or any(key.startswith(('com.docker.compose.','desktop.docker.io.')) for key in cfg.get('Labels',{}))):
+                    or any(key.startswith(('com.docker.compose.','desktop.docker.io/','desktop.docker.io.')) for key in cfg.get('Labels',{}))):
                 raise Blocked('ISOLATED_IMAGE_METADATA_MISMATCH')
             if preparer.checkpoint(image_id)!=state['staticRuntimeHashes']:raise Blocked('ISOLATED_RUNTIME_CHANGED')
             preparer.inspect_live()

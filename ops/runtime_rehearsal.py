@@ -78,7 +78,7 @@ class OfflineBootRehearsal:
         labels = cfg.get("Labels") or {}
         if (metadata.get("Id") != image or cfg.get("Volumes") or cfg.get("ExposedPorts")
                 or labels.get("org.suzume.runtime-trial") != preparation_id
-                or any(key.startswith(("com.docker.compose.", "desktop.docker.io.")) for key in labels)):
+                or any(key.startswith(("com.docker.compose.", "desktop.docker.io/", "desktop.docker.io.")) for key in labels)):
             raise Blocked("ISOLATED_IMAGE_METADATA_CHANGED")
         if self.preparer.checkpoint(image) != state["staticRuntimeHashes"]:
             raise Blocked("ISOLATED_RUNTIME_CHANGED")
