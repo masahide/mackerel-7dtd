@@ -109,7 +109,7 @@ cron は PID/start token と元 crontab hash を保存して一時停止し、�
 `desktop.docker.io/` の bind 情報を除き、作成後の全 mount が私有コピーと一致する場合だけ起動する。
 `check-start` は固定起動確認に限り、オンラインコピーの整合性や完全復旧の証明には使わない。
 network=none で EOS の初期化が失敗するため、固定版の `platform.cfg` と
-V3.3.0 b18 の metadata で確認した LAN/None 設定を、試行専用ファイルへ限定して使う。
+V3.3.0 b18 の metadata で確認した Local/None（LAN は server-only）設定を、試行専用ファイルへ限定して使う。
 このファイルだけを read-only bind で重ね、元 ServerFiles コピー・アーカイブ・本番設定は保持する。
 元の Steam/EOS/VPN 経路の復旧確認は、このオフライン起動から証明しない。
 

@@ -198,7 +198,7 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertFalse(result["sourceQuiescent"])
         self.assertFalse(result["verified"])
         self.assertFalse(result["runtimeRestored"])
-        self.assertEqual(result['platformMode'],'LAN_without_EOS')
+        self.assertEqual(result['platformMode'],'LOCAL_LAN_without_EOS')
         cfg=self.fixture.root/'upgrade-backups'/('adapter-preparation-'+self.fixture.job)/'fixed-start-readiness-trial/platform.cfg'
         self.assertEqual(cfg.read_bytes(),OFFLINE_PLATFORM)
         fixed=self.fixture.root/'upgrade-backups'/('adapter-preparation-'+self.fixture.job)/'restore-target-copy/ServerFiles/platform.cfg'

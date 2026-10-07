@@ -16,7 +16,7 @@ from suzume_update import ArchiveStore, Blocked, FrozenTarget, JOB, archive_memb
 
 TARGET = "Game version: V 3.3.0 (b18) Compatibility Version: V 3.3.0"
 OBSERVED_PLATFORM_LINES = ["platform=Steam", "crossplatform=EOS", "serverplatforms=Steam,XBL,PSN,LAN,"]
-OFFLINE_PLATFORM = b"platform=LAN\ncrossplatform=None\nserverplatforms=LAN\n"
+OFFLINE_PLATFORM = b"platform=Local\ncrossplatform=None\nserverplatforms=LAN\n"
 MEMORY_PROBE = "import json,pathlib; m=dict(line.split(':',1) for line in pathlib.Path('/proc/meminfo').read_text().splitlines()); print(json.dumps({'memoryAvailable':int(m['MemAvailable'].split()[0])*1024}))"
 PROBE = r'''
 import json,re,socket,time,xml.etree.ElementTree as ET
@@ -87,8 +87,8 @@ class OfflineBootRehearsal:
         return image
 
     def offline_platform_copy(self, server, trial_root):
-        # V3.3.0 b18 metadata confirms LAN support and None skips crossplatform
-        # initialization. Only this new, read-only file differs in the trial;
+        # V3.3.0 b18 metadata confirms Local as native and LAN as server-only;
+        # None skips crossplatform initialization. This read-only trial file
         # the fixed ServerFiles copy, original archive and live files stay intact.
         source = server / "platform.cfg"
         if source.is_symlink() or not source.is_file() or source.read_text().splitlines() != OBSERVED_PLATFORM_LINES:
@@ -235,7 +235,7 @@ class OfflineBootRehearsal:
                     args += ["--mount", "type=bind,source=" + str(platform) + ",target=" + platform_target + ",readonly"]
                     self.expected_mounts[platform_target] = ("bind", str(platform))
                     self.readonly_targets = {platform_target}
-                    receipt.update(platformMode="LAN_without_EOS", sourcePlatformSha256=source_hash, platformOverrideSha256=trial_hash)
+                    receipt.update(platformMode="LOCAL_LAN_without_EOS", sourcePlatformSha256=source_hash, platformOverrideSha256=trial_hash)
                 args.append(runtime_image)
                 if mode == "check-start":
                     args.append("infinity")
