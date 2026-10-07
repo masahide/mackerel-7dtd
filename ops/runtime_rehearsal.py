@@ -15,6 +15,8 @@ from runtime_freeze import BUILD, CONTAINER, DockerRunner, ROOT, RuntimePreparer
 from suzume_update import ArchiveStore, Blocked, FrozenTarget, JOB, archive_members, atomic_json, digest
 
 TARGET = "Game version: V 3.3.0 (b18) Compatibility Version: V 3.3.0"
+OBSERVED_PLATFORM_LINES = ["platform=Steam", "crossplatform=EOS", "serverplatforms=Steam,XBL,PSN,LAN,"]
+OFFLINE_PLATFORM = b"platform=LAN\ncrossplatform=None\nserverplatforms=LAN\n"
 MEMORY_PROBE = "import json,pathlib; m=dict(line.split(':',1) for line in pathlib.Path('/proc/meminfo').read_text().splitlines()); print(json.dumps({'memoryAvailable':int(m['MemAvailable'].split()[0])*1024}))"
 PROBE = r'''
 import json,re,socket,time,xml.etree.ElementTree as ET
@@ -84,6 +86,21 @@ class OfflineBootRehearsal:
             raise Blocked("ISOLATED_RUNTIME_CHANGED")
         return image
 
+    def offline_platform_copy(self, server, trial_root):
+        # V3.3.0 b18 metadata confirms LAN support and None skips crossplatform
+        # initialization. Only this new, read-only file differs in the trial;
+        # the fixed ServerFiles copy, original archive and live files stay intact.
+        source = server / "platform.cfg"
+        if source.is_symlink() or not source.is_file() or source.read_text().splitlines() != OBSERVED_PLATFORM_LINES:
+            raise Blocked("PLATFORM_CONFIGURATION_NOT_OBSERVED")
+        destination = trial_root / "platform.cfg"
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:stream.write(OFFLINE_PLATFORM)
+        original = source.stat()
+        os.chown(destination, original.st_uid, original.st_gid)
+        destination.chmod(0o644) # Contains only public platform names, no secrets.
+        return destination, digest(source), digest(destination)
+
     def inspect_trial(self, name, preparation_id, image):
         values = json.loads(self.runner.run(["docker", "inspect", name], 30))
         if len(values) != 1:
@@ -98,9 +115,12 @@ class OfflineBootRehearsal:
             raise Blocked("TRIAL_IDENTITY_MISMATCH")
         expected_mounts = getattr(self, "expected_mounts", None)
         if expected_mounts is not None:
-            actual = {m.get("Destination"): (m.get("Type"), m.get("Source")) for m in ins.get("Mounts", [])}
-            if actual != expected_mounts:
+            mounts = ins.get("Mounts", [])
+            actual = {m.get("Destination"): (m.get("Type"), m.get("Source")) for m in mounts}
+            if actual != expected_mounts or len(mounts) != len(expected_mounts):
                 raise Blocked("TRIAL_MOUNTS_NOT_ISOLATED")
+            if any(m.get("RW") is not False for m in mounts if m.get("Destination") in getattr(self, "readonly_targets", set())):
+                raise Blocked("TRIAL_PLATFORM_OVERRIDE_NOT_READONLY")
         return cid, ins
 
     def run(self, preparation_id, mode="online"):
@@ -209,6 +229,13 @@ class OfflineBootRehearsal:
                 for source, target in mounts:
                     args += ["--mount", "type=bind,source=" + str(source) + ",target=" + target]
                 self.expected_mounts = {target: ("bind", str(source)) for source, target in mounts}
+                if mode == "check-start":
+                    platform, source_hash, trial_hash = self.offline_platform_copy(server, trial_root)
+                    platform_target = "/home/sdtdserver/serverfiles/platform.cfg"
+                    args += ["--mount", "type=bind,source=" + str(platform) + ",target=" + platform_target + ",readonly"]
+                    self.expected_mounts[platform_target] = ("bind", str(platform))
+                    self.readonly_targets = {platform_target}
+                    receipt.update(platformMode="LAN_without_EOS", sourcePlatformSha256=source_hash, platformOverrideSha256=trial_hash)
                 args.append(runtime_image)
                 if mode == "check-start":
                     args.append("infinity")

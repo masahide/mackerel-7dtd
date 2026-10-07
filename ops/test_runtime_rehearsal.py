@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+from pathlib import Path
 import socket
 import subprocess
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 from runtime_freeze import CONTAINER
-from runtime_rehearsal import MEMORY_PROBE, OfflineBootRehearsal, PROBE, TARGET
+from runtime_rehearsal import MEMORY_PROBE, OBSERVED_PLATFORM_LINES, OFFLINE_PLATFORM, OfflineBootRehearsal, PROBE, TARGET
 from suzume_update import Blocked
 import test_runtime_freeze as fixtures
 
@@ -39,6 +40,20 @@ class TrialIdentityTest(unittest.TestCase):
                 with self.assertRaisesRegex(Blocked, "TRIAL_IDENTITY_MISMATCH"):
                     trial.inspect_trial("fixed-name", job, image)
                 info.clear(); info.update(original)
+
+    def test_platform_override_requires_exact_private_readonly_mount(self):
+        job,image="a"*32,"sha256:"+"b"*64
+        target='/home/sdtdserver/serverfiles/platform.cfg'
+        mount={'Destination':target,'Type':'bind','Source':'/private/trial/platform.cfg','RW':False}
+        info={'Id':'c'*64,'Image':image,'Config':{'Labels':{'org.suzume.rehearsal':job}},
+              'HostConfig':{'NetworkMode':'none','PortBindings':None,'RestartPolicy':{'Name':'no'}},'Mounts':[mount]}
+        runner=SimpleNamespace(run=lambda *_:json.dumps([info]));trial=OfflineBootRehearsal(SimpleNamespace(runner=runner))
+        trial.expected_mounts={target:('bind',mount['Source'])};trial.readonly_targets={target}
+        trial.inspect_trial('fixed',job,image)
+        mount['RW']=True
+        with self.assertRaisesRegex(Blocked,'TRIAL_PLATFORM_OVERRIDE_NOT_READONLY'):trial.inspect_trial('fixed',job,image)
+        mount['RW']=False;info['Mounts'].append(dict(mount))
+        with self.assertRaisesRegex(Blocked,'TRIAL_MOUNTS_NOT_ISOLATED'):trial.inspect_trial('fixed',job,image)
 
     def test_probe_authentication_and_fragmented_reply_use_crlf_without_exposing_secret(self):
         password = "fixture-private-password"
@@ -75,6 +90,7 @@ class OfflineRehearsalTest(unittest.TestCase):
             (f.root / name).mkdir()
             (f.root / name / "fixture.txt").write_text("private fixture")
         (f.root / "ServerFiles/7DaysToDieServer.x86_64").write_bytes(b"fixture game executable")
+        (f.root / "ServerFiles/platform.cfg").write_text('\n'.join(OBSERVED_PLATFORM_LINES)+'\n')
         f.preparer.prepare(f.job)
         f.preparer.stage_recovery_copy(f.job)
         space = patch("runtime_rehearsal.shutil.disk_usage", return_value=SimpleNamespace(free=1024**4))
@@ -103,7 +119,7 @@ class OfflineRehearsalTest(unittest.TestCase):
                 return json.dumps([{"Id": self.trial_id, "Image": f.runner.frozen_id,
                                    "Config": {"Labels": {"org.suzume.rehearsal": f.job}},
                                    "HostConfig": {"NetworkMode": "none", "RestartPolicy": {"Name": "no"}},
-                                   "Mounts": [{"Destination": target, "Type": value[0], "Source": "/live" if self.wrong_mount else value[1]} for target, value in getattr(self.trial, "expected_mounts", {}).items()],
+                                   "Mounts": [{"Destination": target, "Type": value[0], "Source": "/live" if self.wrong_mount else value[1], "RW":target not in getattr(self.trial,"readonly_targets",set())} for target, value in getattr(self.trial, "expected_mounts", {}).items()],
                                    "State": {"Status": self.status, "OOMKilled": False}}])
             if args[:3] == ["docker", "exec", self.trial_id] and args[-1] == PROBE: return json.dumps({"gameVersion": self.probe_version})
             if args[:2] == ["docker", "logs"]:
@@ -182,6 +198,11 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertFalse(result["sourceQuiescent"])
         self.assertFalse(result["verified"])
         self.assertFalse(result["runtimeRestored"])
+        self.assertEqual(result['platformMode'],'LAN_without_EOS')
+        cfg=self.fixture.root/'upgrade-backups'/('adapter-preparation-'+self.fixture.job)/'fixed-start-readiness-trial/platform.cfg'
+        self.assertEqual(cfg.read_bytes(),OFFLINE_PLATFORM)
+        fixed=self.fixture.root/'upgrade-backups'/('adapter-preparation-'+self.fixture.job)/'restore-target-copy/ServerFiles/platform.cfg'
+        self.assertEqual(fixed.read_text().splitlines(),OBSERVED_PLATFORM_LINES)
         self.assertTrue(result["trialRemoved"])
         command = ["docker", "exec", "--user", "sdtdserver", "--workdir", "/home/sdtdserver", self.trial_id, "./sdtdserver", "start"]
         self.assertIn(command, self.calls)
@@ -189,6 +210,23 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertIn("/bin/sleep", start)
         self.assertIn("infinity", start)
         self.assertNotIn(CONTAINER, start)
+
+    def test_unknown_platform_configuration_cannot_be_overridden_or_started(self):
+        source=self.fixture.root/'ServerFiles/platform.cfg'
+        source.write_text('platform=unknown\ncrossplatform=EOS\n')
+        trial_root=self.fixture.root/'new-platform-trial';trial_root.mkdir()
+        with self.assertRaisesRegex(Blocked,'PLATFORM_CONFIGURATION_NOT_OBSERVED'):
+            self.trial.offline_platform_copy(source.parent,trial_root)
+        self.assertFalse((trial_root/'platform.cfg').exists())
+
+    def test_offline_platform_cannot_overwrite_existing_copy(self):
+        source=self.fixture.root/'ServerFiles/platform.cfg'
+        original=source.read_bytes();trial_root=self.fixture.root/'new-platform-trial';trial_root.mkdir()
+        self.trial.offline_platform_copy(source.parent,trial_root)
+        (trial_root/'platform.cfg').write_text('retained evidence')
+        with self.assertRaises(FileExistsError):self.trial.offline_platform_copy(source.parent,trial_root)
+        self.assertEqual((trial_root/'platform.cfg').read_text(),'retained evidence')
+        self.assertEqual(source.read_bytes(),original)
 
     def test_wrong_mount_is_rejected_before_container_start(self):
         self.wrong_mount = True

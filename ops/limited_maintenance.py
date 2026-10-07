@@ -165,7 +165,7 @@ class LiveBackend:
         if any((config / name).is_symlink() or digest(config / name) != value for name, value in CONFIG_HASHES.items()):
             raise Blocked("GSM_CONFIGURATION_CHANGED")
         saved = self.folder / "restore-target-copy/ServerFiles"
-        for name in ["7DaysToDieServer.x86_64", "sdtdserver.xml"]:
+        for name in ["7DaysToDieServer.x86_64", "sdtdserver.xml", "platform.cfg"]:
             if digest(saved / name) != digest(self.p.root / "ServerFiles" / name):
                 raise Blocked("FIXED_GAME_OR_XML_CHANGED")
 
