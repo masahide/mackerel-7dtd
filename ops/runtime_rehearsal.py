@@ -74,6 +74,11 @@ class OfflineBootRehearsal:
                 or host.get("NetworkMode") != "none" or host.get("PortBindings")
                 or host.get("Privileged") or host.get("RestartPolicy", {}).get("Name") != "no"):
             raise Blocked("TRIAL_IDENTITY_MISMATCH")
+        expected_mounts = getattr(self, "expected_mounts", None)
+        if expected_mounts is not None:
+            actual = {m.get("Destination"): (m.get("Type"), m.get("Source")) for m in ins.get("Mounts", [])}
+            if actual != expected_mounts:
+                raise Blocked("TRIAL_MOUNTS_NOT_ISOLATED")
         return cid, ins
 
     def run(self, preparation_id, mode="online"):
@@ -165,7 +170,9 @@ class OfflineBootRehearsal:
                 for directory in ["log", "backups"]:
                     source_stat = (p.root / directory).stat()
                     os.chown(trial_root / directory, source_stat.st_uid, source_stat.st_gid)
-                args = ["docker", "run", "--detach", "--name", name, "--label", "org.suzume.rehearsal=" + preparation_id,
+                args = ["docker", "create", "--name", name, "--label", "org.suzume.rehearsal=" + preparation_id,
+                        "--label", "com.docker.compose.project=suzume-isolated-check",
+                        "--label", "com.docker.compose.service=rehearsal", "--label", "com.docker.compose.oneoff=True",
                         "--network", "none", "--restart", "no", "--cpus", "2", "--memory", "6g", "--memory-swap", "6g",
                         "--pids-limit", "512", "--cap-drop", "NET_RAW", "--entrypoint",
                         "/home/sdtdserver/user.sh" if mode == "online" else "/bin/sleep"]
@@ -175,6 +182,7 @@ class OfflineBootRehearsal:
                           (trial_root / "log", "/home/sdtdserver/log"), (trial_root / "backups", "/home/sdtdserver/lgsm/backup")]
                 for source, target in mounts:
                     args += ["--mount", "type=bind,source=" + str(source) + ",target=" + target]
+                self.expected_mounts = {target: ("bind", str(source)) for source, target in mounts}
                 args.append(state["frozenImageId"])
                 if mode == "check-start":
                     args.append("infinity")
@@ -185,6 +193,8 @@ class OfflineBootRehearsal:
                 self.runner.run(args, 60)
                 cid, _ = self.inspect_trial(name, preparation_id, state["frozenImageId"])
                 receipt["trialContainerId"] = cid
+                # Verify all mounts/ports before any entrypoint or game executes.
+                self.runner.run(["docker", "start", cid], 60)
                 if mode == "check-start":
                     phase("checking_fixed_gsm_start")
                     self.runner.run(["docker", "exec", "--user", "sdtdserver", "--workdir", "/home/sdtdserver",

@@ -87,18 +87,23 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.change_online_world = False
         self.cleanup_failure = None
         self.logs_failure = False
+        self.wrong_mount = False
         original_run = f.runner.run
         def run(args, timeout=1800):
             self.calls.append(args)
             if args[:2] == ["docker", "info"]: return json.dumps({"MemTotal": self.mem_total, "NCPU": 8})
             if args[-1] == MEMORY_PROBE: return json.dumps({"memoryAvailable": self.mem_available})
-            if args[:3] == ["docker", "run", "--detach"]:
+            if args[:2] == ["docker", "create"]:
                 if self.start_failure: raise Blocked("MOCK_START_REPLY_LOST")
+                return self.trial_id
+            if args[:2] == ["docker", "start"]:
+                self.status = "running"
                 return self.trial_id
             if args[:2] == ["docker", "inspect"] and args[2] != CONTAINER:
                 return json.dumps([{"Id": self.trial_id, "Image": f.runner.frozen_id,
                                    "Config": {"Labels": {"org.suzume.rehearsal": f.job}},
                                    "HostConfig": {"NetworkMode": "none", "RestartPolicy": {"Name": "no"}},
+                                   "Mounts": [{"Destination": target, "Type": value[0], "Source": "/live" if self.wrong_mount else value[1]} for target, value in getattr(self.trial, "expected_mounts", {}).items()],
                                    "State": {"Status": self.status, "OOMKilled": False}}])
             if args[:3] == ["docker", "exec", self.trial_id] and args[-1] == PROBE: return json.dumps({"gameVersion": self.probe_version})
             if args[:2] == ["docker", "logs"]:
@@ -131,7 +136,7 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertFalse(result["cleanupRequired"])
         self.assertTrue(result["privateLogsSaved"])
         for key in ["verified", "fullWorldBackup", "runtimeRestored", "productionEnabled"]: self.assertFalse(result[key])
-        start = next(c for c in self.calls if c[:3] == ["docker", "run", "--detach"])
+        start = next(c for c in self.calls if c[:2] == ["docker", "create"])
         self.assertIn("none", start)
         self.assertIn("6g", start)
         self.assertNotIn("--publish", start)
@@ -149,7 +154,7 @@ class OfflineRehearsalTest(unittest.TestCase):
     def test_insufficient_current_capacity_cannot_start_trial(self):
         self.mem_available = 3 * 1024**3
         with self.assertRaisesRegex(Blocked, "TRIAL_RESOURCE_CAPACITY_UNAVAILABLE"): self.trial.run(self.fixture.job)
-        self.assertFalse(any(c[:3] == ["docker", "run", "--detach"] for c in self.calls))
+        self.assertFalse(any(c[:2] == ["docker", "create"] for c in self.calls))
 
     def receipt(self):
         folder = self.fixture.root / "upgrade-backups" / ("adapter-preparation-" + self.fixture.job) / "offline-runtime-trial"
@@ -158,7 +163,7 @@ class OfflineRehearsalTest(unittest.TestCase):
     def test_online_world_change_stops_before_boot_and_preserves_failure_phase(self):
         self.change_online_world = True
         with self.assertRaisesRegex(Blocked, "ONLINE_COPY_NOT_MATCHED"): self.trial.run(self.fixture.job)
-        self.assertFalse(any(c[:3] == ["docker", "run", "--detach"] for c in self.calls))
+        self.assertFalse(any(c[:2] == ["docker", "create"] for c in self.calls))
         result = self.receipt()
         self.assertEqual(result["failedPhase"], "comparing_online_source")
         self.assertFalse(result["startAttempted"])
@@ -179,10 +184,17 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertTrue(result["trialRemoved"])
         command = ["docker", "exec", "--user", "sdtdserver", "--workdir", "/home/sdtdserver", self.trial_id, "./sdtdserver", "start"]
         self.assertIn(command, self.calls)
-        start = next(c for c in self.calls if c[:3] == ["docker", "run", "--detach"])
+        start = next(c for c in self.calls if c[:2] == ["docker", "create"])
         self.assertIn("/bin/sleep", start)
         self.assertIn("infinity", start)
         self.assertNotIn(CONTAINER, start)
+
+    def test_wrong_mount_is_rejected_before_container_start(self):
+        self.wrong_mount = True
+        with self.assertRaisesRegex(Blocked, "TRIAL_MOUNTS_NOT_ISOLATED"): self.trial.run(self.fixture.job)
+        self.assertFalse(any(c[:2] == ["docker", "start"] for c in self.calls))
+        self.assertFalse(any(c[:2] == ["docker", "stop"] for c in self.calls))
+        self.assertTrue(self.receipt()["cleanupRequired"])
 
     def assert_cleanup_failure(self, failure):
         self.cleanup_failure = failure
