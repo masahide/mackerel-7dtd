@@ -5,14 +5,15 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 from runtime_freeze import CONTAINER
-from runtime_rehearsal import MEMORY_PROBE, OBSERVED_PLATFORM_LINES, OFFLINE_PLATFORM, OfflineBootRehearsal, PROBE, TARGET
-from suzume_update import Blocked
+from runtime_rehearsal import MEMORY_PROBE, OBSERVED_PLATFORM_LINES, OBSERVED_WORLD_DAY, OFFLINE_PLATFORM, OfflineBootRehearsal, PROBE, TARGET, WORLD_PROBE
+from suzume_update import Blocked, digest
 import test_runtime_freeze as fixtures
 
 
@@ -78,6 +79,73 @@ class TrialIdentityTest(unittest.TestCase):
         self.assertNotIn(password, output.getvalue())
         self.assertEqual(fake.sent, [password.encode() + b"\r\n", b"version\r\n"])
 
+    def test_world_probe_requires_time_and_exact_player_reply(self):
+        root=ET.fromstring('<ServerSettings><property name="TelnetEnabled" value="true"/><property name="TelnetPort" value="8081"/></ServerSettings>')
+        class Sock:
+            def __init__(self):self.replies=[b'Connected to session.\r\n'];self.sent=[]
+            def __enter__(self):return self
+            def __exit__(self,*_):pass
+            def settimeout(self,_):pass
+            def recv(self,_):return self.replies.pop(0) if self.replies else b''
+            def sendall(self,data):
+                self.sent.append(data)
+                self.replies=[{b'version\r\n':TARGET.encode()+b'\r\n',b'gt\r\n':b'Day 848, 20:17\r\n',b'lp\r\n':b'Total of 0 in the game\r\n'}[data]]
+        sock,out=Sock(),io.StringIO()
+        with patch('socket.create_connection',return_value=sock),patch('xml.etree.ElementTree.parse',return_value=ET.ElementTree(root)),contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as exited:exec(compile(WORLD_PROBE,'world-probe-test','exec'),{})
+        self.assertEqual(exited.exception.code,0)
+        self.assertEqual(json.loads(out.getvalue())['gameTime'],{'days':848,'hours':20,'minutes':17})
+        self.assertEqual(sock.sent,[b'version\r\n',b'gt\r\n',b'lp\r\n'])
+
+
+class QuiescentReceiptTest(unittest.TestCase):
+    def setUp(self):
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        self.root=Path(temp.name);self.job='a'*32
+        self.records=self.root/'upgrade-backups/limited-maintenance-reservation';self.records.mkdir(parents=True)
+        self.folder=self.root/'upgrade-backups'/('adapter-preparation-'+self.job)
+        (self.folder/'limited-maintenance').mkdir(parents=True)
+        self.archive=self.folder/'limited-maintenance/quiescent-world-config.tar'
+        self.archive.write_bytes(b'fixture')
+        self.state={'jobId':self.job,'phase':'completed','gameVersion':TARGET,'gameExitCode':0,
+                    **{k:True for k in ['gameReturned','writerAbsenceVerified','shutdownSent','telnetEOF','sourceQuiescent']},
+                    **{k:False for k in ['recoveryRequired','fullWorldBackup','verified','runtimeRestored']},
+                    'quiescentCopySha256':digest(self.archive),'quiescentCopyBytes':self.archive.stat().st_size}
+        self.record=self.records/(self.job+'.completed.json')
+        self.trial=OfflineBootRehearsal(SimpleNamespace(root=self.root,runner=None))
+        mock=patch('runtime_rehearsal.archive_members');mock.start();self.addCleanup(mock.stop)
+        self.save()
+    def save(self):self.record.write_text(json.dumps(self.state))
+    def test_completed_clean_return_is_required_without_promoting_full_proof(self):
+        archive,state=self.trial.quiescent_archive(self.folder,self.job)
+        self.assertEqual(archive,self.archive)
+        self.assertFalse(state['verified']);self.assertFalse(state['runtimeRestored'])
+    def test_missing_or_changed_shutdown_return_proof_is_rejected(self):
+        for key,value in [('gameReturned',False),('sourceQuiescent',False),('writerAbsenceVerified',False),
+                          ('gameExitCode',True),('phase','returned_with_error'),('recoveryRequired',True),('verified',True),('errorCode','FAIL')]:
+            with self.subTest(key=key):
+                old=dict(self.state);self.state[key]=value;self.save()
+                with self.assertRaisesRegex(Blocked,'QUIESCENT_RETURN_NOT_PROVEN'):self.trial.quiescent_archive(self.folder,self.job)
+                self.state=old;self.save()
+    def test_archive_content_size_or_digest_changes_are_rejected(self):
+        self.archive.write_bytes(b'changed')
+        with self.assertRaisesRegex(Blocked,'QUIESCENT_COPY_CHANGED'):self.trial.quiescent_archive(self.folder,self.job)
+        self.archive.write_bytes(b'fixture');self.state['quiescentCopyBytes']=True;self.save()
+        with self.assertRaisesRegex(Blocked,'QUIESCENT_COPY_CHANGED'):self.trial.quiescent_archive(self.folder,self.job)
+    def test_outstanding_maintenance_is_rejected(self):
+        (self.records/'reservation.json').write_text('{}')
+        with self.assertRaisesRegex(Blocked,'QUIESCENT_RETURN_RECEIPT_UNAVAILABLE'):self.trial.quiescent_archive(self.folder,self.job)
+    def test_world_external_paths_or_ambiguous_saves_are_rejected(self):
+        server=self.root/'ServerFiles';server.mkdir()
+        xml=server/'sdtdserver.xml'
+        base='<ServerSettings><property name="GameName" value="SUZUME3.0"/><property name="GameWorld" value="RWG"/>{}</ServerSettings>'
+        xml.write_text(base.format('<property name="SaveGameFolder" value="/live/world"/>'))
+        with self.assertRaisesRegex(Blocked,'RESTORED_WORLD_CONFIGURATION_UNAVAILABLE'):self.trial.restored_world(self.root)
+        xml.write_text(base.format(''))
+        for world in ['One','Two']:
+            save=self.root/'7DaysToDie/Saves'/world/'SUZUME3.0';save.mkdir(parents=True);(save/'main.ttw').write_bytes(b'save')
+        with self.assertRaisesRegex(Blocked,'RESTORED_WORLD_CONFIGURATION_UNAVAILABLE'):self.trial.restored_world(self.root)
+
 
 @unittest.skipUnless(os.name == "posix", "GNU tar copy rehearsal runs on Linux CI")
 class OfflineRehearsalTest(unittest.TestCase):
@@ -121,7 +189,7 @@ class OfflineRehearsalTest(unittest.TestCase):
                                    "HostConfig": {"NetworkMode": "none", "RestartPolicy": {"Name": "no"}},
                                    "Mounts": [{"Destination": target, "Type": value[0], "Source": "/live" if self.wrong_mount else value[1], "RW":target not in getattr(self.trial,"readonly_targets",set())} for target, value in getattr(self.trial, "expected_mounts", {}).items()],
                                    "State": {"Status": self.status, "OOMKilled": False}}])
-            if args[:3] == ["docker", "exec", self.trial_id] and args[-1] == PROBE: return json.dumps({"gameVersion": self.probe_version})
+            if args[:3] == ["docker", "exec", self.trial_id] and args[-1] in [PROBE,WORLD_PROBE]: return json.dumps({"gameVersion": self.probe_version,"gameTime":{"days":OBSERVED_WORLD_DAY,"hours":20,"minutes":17},"onlinePlayers":0})
             if args[:2] == ["docker", "logs"]:
                 if self.logs_failure: raise Blocked("MOCK_LOG_READ_FAILED")
                 return "fixture-private-log"
@@ -234,6 +302,37 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertFalse(any(c[:2] == ["docker", "start"] for c in self.calls))
         self.assertFalse(any(c[:2] == ["docker", "stop"] for c in self.calls))
         self.assertTrue(self.receipt()["cleanupRequired"])
+
+    def test_quiescent_copy_restores_fresh_server_and_saved_world_before_boot(self):
+        f=self.fixture;folder=f.root/'upgrade-backups'/('adapter-preparation-'+f.job)
+        server=f.root/'ServerFiles'
+        (server/'sdtdserver.xml').write_text('<ServerSettings><property name="GameName" value="SUZUME3.0"/><property name="GameWorld" value="RWG"/></ServerSettings>')
+        world=f.root/'7DaysToDie/Saves/Fixture World/SUZUME3.0';world.mkdir(parents=True);(world/'main.ttw').write_bytes(b'fixture saved world')
+        generated=f.root/'7DaysToDie/GeneratedWorlds/Fixture World';generated.mkdir(parents=True);(generated/'map_info.xml').write_text('<map/>')
+        # Refresh this fixture's fixed payload; actual preparation is immutable.
+        import tarfile
+        payload=folder/'target-serverfiles.tar'
+        with tarfile.open(payload,'w') as t:t.add(server,arcname='ServerFiles')
+        state_path=folder/'state.json';state=json.loads(state_path.read_text());state['payloadSha256']=digest(payload);state_path.write_text(json.dumps(state))
+        copy=folder/'limited-maintenance';copy.mkdir();archive=copy/'quiescent-world-config.tar'
+        with tarfile.open(archive,'w') as t:
+            for name in ['7DaysToDie','LGSM-Config']:t.add(f.root/name,arcname=name)
+        record=f.root/'upgrade-backups/limited-maintenance-reservation';record.mkdir()
+        proof={'jobId':f.job,'phase':'completed','gameVersion':TARGET,'gameExitCode':0,
+               **{k:True for k in ['gameReturned','writerAbsenceVerified','shutdownSent','telnetEOF','sourceQuiescent']},
+               **{k:False for k in ['recoveryRequired','fullWorldBackup','verified','runtimeRestored']},
+               'quiescentCopySha256':digest(archive),'quiescentCopyBytes':archive.stat().st_size}
+        (record/(f.job+'.completed.json')).write_text(json.dumps(proof))
+        with patch.object(self.trial,'resolve_trial_image',return_value=f.runner.frozen_id):result=self.trial.run(f.job,mode='quiescent')
+        self.assertTrue(result['sourceQuiescent']);self.assertTrue(result['savedWorldBootVerified']);self.assertTrue(result['worldConfigCopyRestored'])
+        self.assertEqual(result['savedWorld'],'Fixture World');self.assertEqual(result['gameTime']['days'],848)
+        self.assertTrue(result['trialRemoved'])
+        for key in ['verified','fullWorldBackup','runtimeRestored','productionEnabled']:self.assertFalse(result[key])
+        create=next(c for c in self.calls if c[:2]==['docker','create'])
+        binds=[a for a in create if a.startswith('type=bind,')]
+        self.assertEqual(len(binds),6)
+        self.assertTrue(all('quiescent-recovery-trial' in a for a in binds))
+        self.assertFalse(any('restore-target-copy' in a for a in binds))
 
     def assert_cleanup_failure(self, failure):
         self.cleanup_failure = failure
