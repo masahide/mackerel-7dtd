@@ -76,9 +76,11 @@ class OfflineBootRehearsal:
             raise Blocked("TRIAL_IDENTITY_MISMATCH")
         return cid, ins
 
-    def run(self, preparation_id):
+    def run(self, preparation_id, mode="online"):
         if not isinstance(preparation_id, str) or not JOB.fullmatch(preparation_id):
             raise Blocked("INVALID_PREPARATION_ID")
+        if mode not in ["online", "check-start"]:
+            raise Blocked("INVALID_TRIAL_MODE")
         p = self.preparer
         folder = p.root / "upgrade-backups" / ("adapter-preparation-" + preparation_id)
         if folder.is_symlink() or not folder.is_dir():
@@ -89,7 +91,7 @@ class OfflineBootRehearsal:
                 or copied.get("phase") != "target_copy_restored" or copied.get("filesystemCopyRestored") is not True
                 or state.get("verified") is not False or copied.get("verified") is not False):
             raise Blocked("TRIAL_ASSETS_NOT_PREPARED")
-        trial_root = folder / "offline-runtime-trial"
+        trial_root = folder / ("offline-runtime-trial" if mode == "online" else "fixed-start-readiness-trial")
         try:
             trial_root.mkdir(mode=0o700)  # Never retry/reuse an uncertain trial.
         except FileExistsError:
@@ -97,12 +99,14 @@ class OfflineBootRehearsal:
         receipt = {"preparationId": preparation_id, "phase": "checking", "createdAt": time.time(),
                    "offlineBootVerified": False, "fullWorldBackup": False, "verified": False,
                    "runtimeRestored": False, "productionEnabled": False,
-                   "startAttempted": False, "cleanupRequired": False}
+                   "startAttempted": False, "cleanupRequired": False,
+                   "purpose": "world_copy_trial" if mode == "online" else "fixed_start_only",
+                   "sourceQuiescent": False}
         def phase(value):
             receipt.update(phase=value, updatedAt=time.time())
             atomic_json(trial_root / "receipt.json", receipt)
             self.emit({"preparationId": preparation_id, "phase": value})
-        name = "suzume-offline-check-" + preparation_id
+        name = ("suzume-offline-check-" if mode == "online" else "suzume-start-check-") + preparation_id
         cid, start_attempted = None, False
         with p.release_lock():
             try:
@@ -129,19 +133,26 @@ class OfflineBootRehearsal:
                 if (server.is_symlink() or mod_inventory(server.parent) != state["approvedModHashes"]
                         or digest(server / "7DaysToDieServer.x86_64") != digest(p.root / "ServerFiles/7DaysToDieServer.x86_64")):
                     raise Blocked("TRIAL_TARGET_COPY_CHANGED")
-                phase("copying_online_world_for_trial")
-                archive = trial_root / "online-world-config.tar"
-                self.runner.run(["tar", "--acls", "--xattrs", "--numeric-owner", "-cpf", str(archive),
-                                 "-C", str(p.root), "7DaysToDie", "LGSM-Config"], 300)
-                archive.chmod(0o600)
-                phase("comparing_online_source")
-                try:
-                    self.runner.run(["tar", "--acls", "--xattrs", "--compare", "--file", str(archive), "-C", str(p.root)], 300)
-                except Blocked:
-                    # Even zero players does not stop periodic world writes.
-                    # A failed comparison cannot become a recovery proof.
-                    raise Blocked("ONLINE_COPY_NOT_MATCHED") from None
-                receipt["onlineSourceCompared"] = True
+                if mode == "online":
+                    phase("copying_online_world_for_trial")
+                    archive = trial_root / "online-world-config.tar"
+                    self.runner.run(["tar", "--acls", "--xattrs", "--numeric-owner", "-cpf", str(archive),
+                                     "-C", str(p.root), "7DaysToDie", "LGSM-Config"], 300)
+                    archive.chmod(0o600)
+                    phase("comparing_online_source")
+                    try:
+                        self.runner.run(["tar", "--acls", "--xattrs", "--compare", "--file", str(archive), "-C", str(p.root)], 300)
+                    except Blocked:
+                        raise Blocked("ONLINE_COPY_NOT_MATCHED") from None
+                    receipt["onlineSourceCompared"] = True
+                else:
+                    # Explicit runtime-only rehearsal: an unverified online
+                    # snapshot is never converted into a recovery receipt.
+                    archive = folder / "offline-runtime-trial/online-world-config.tar"
+                    if archive.is_symlink() or not archive.is_file():
+                        raise Blocked("UNVERIFIED_TRIAL_COPY_UNAVAILABLE")
+                    receipt["onlineSourceCompared"] = False
+                    phase("reading_unverified_snapshot_for_start_check")
                 phase("restoring_online_copy")
                 archive_members(archive, allowed=("7DaysToDie", "LGSM-Config"))
                 self.runner.run(["tar", "--acls", "--xattrs", "--numeric-owner", "--same-owner", "--same-permissions",
@@ -156,7 +167,8 @@ class OfflineBootRehearsal:
                     os.chown(trial_root / directory, source_stat.st_uid, source_stat.st_gid)
                 args = ["docker", "run", "--detach", "--name", name, "--label", "org.suzume.rehearsal=" + preparation_id,
                         "--network", "none", "--restart", "no", "--cpus", "2", "--memory", "6g", "--memory-swap", "6g",
-                        "--pids-limit", "512", "--cap-drop", "NET_RAW", "--entrypoint", "/home/sdtdserver/user.sh"]
+                        "--pids-limit", "512", "--cap-drop", "NET_RAW", "--entrypoint",
+                        "/home/sdtdserver/user.sh" if mode == "online" else "/bin/sleep"]
                 mounts = [(server, "/home/sdtdserver/serverfiles"),
                           (trial_root / "7DaysToDie", "/home/sdtdserver/.local/share/7DaysToDie"),
                           (trial_root / "LGSM-Config", "/home/sdtdserver/lgsm/config-lgsm/sdtdserver"),
@@ -164,6 +176,8 @@ class OfflineBootRehearsal:
                 for source, target in mounts:
                     args += ["--mount", "type=bind,source=" + str(source) + ",target=" + target]
                 args.append(state["frozenImageId"])
+                if mode == "check-start":
+                    args.append("infinity")
                 self.require_resource_capacity()
                 receipt.update(startAttempted=True, cleanupRequired=True)
                 phase("starting_offline_trial")
@@ -171,6 +185,10 @@ class OfflineBootRehearsal:
                 self.runner.run(args, 60)
                 cid, _ = self.inspect_trial(name, preparation_id, state["frozenImageId"])
                 receipt["trialContainerId"] = cid
+                if mode == "check-start":
+                    phase("checking_fixed_gsm_start")
+                    self.runner.run(["docker", "exec", "--user", "sdtdserver", "--workdir", "/home/sdtdserver",
+                                     cid, "./sdtdserver", "start"], 60)
                 phase("waiting_for_offline_game")
                 deadline = time.monotonic() + 180
                 while time.monotonic() < deadline:
@@ -237,9 +255,9 @@ class OfflineBootRehearsal:
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 3 or sys.argv[1] != "rehearse":
+        if len(sys.argv) != 3 or sys.argv[1] not in ["rehearse", "check-start"]:
             raise Blocked("USE_REHEARSE_WITH_PREPARATION_ID")
-        output = OfflineBootRehearsal(RuntimePreparer(DockerRunner()), emit=lambda item: print(json.dumps(item), flush=True)).run(sys.argv[2])
+        output = OfflineBootRehearsal(RuntimePreparer(DockerRunner()), emit=lambda item: print(json.dumps(item), flush=True)).run(sys.argv[2], "online" if sys.argv[1] == "rehearse" else "check-start")
         print(json.dumps(output), flush=True)
     except Blocked as error:
         print(json.dumps({"errorCode": str(error)}), flush=True)

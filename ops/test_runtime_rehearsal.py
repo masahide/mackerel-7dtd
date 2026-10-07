@@ -165,6 +165,25 @@ class OfflineRehearsalTest(unittest.TestCase):
         self.assertFalse(result["cleanupRequired"])
         self.assertFalse(result["verified"])
 
+    def test_fixed_start_on_unverified_snapshot_cannot_claim_world_recovery(self):
+        self.change_online_world = True
+        with self.assertRaisesRegex(Blocked, "ONLINE_COPY_NOT_MATCHED"): self.trial.run(self.fixture.job)
+        self.change_online_world = False
+        result = self.trial.run(self.fixture.job, mode="check-start")
+        self.assertTrue(result["offlineBootVerified"])
+        self.assertEqual(result["purpose"], "fixed_start_only")
+        self.assertFalse(result["onlineSourceCompared"])
+        self.assertFalse(result["sourceQuiescent"])
+        self.assertFalse(result["verified"])
+        self.assertFalse(result["runtimeRestored"])
+        self.assertTrue(result["trialRemoved"])
+        command = ["docker", "exec", "--user", "sdtdserver", "--workdir", "/home/sdtdserver", self.trial_id, "./sdtdserver", "start"]
+        self.assertIn(command, self.calls)
+        start = next(c for c in self.calls if c[:3] == ["docker", "run", "--detach"])
+        self.assertIn("/bin/sleep", start)
+        self.assertIn("infinity", start)
+        self.assertNotIn(CONTAINER, start)
+
     def assert_cleanup_failure(self, failure):
         self.cleanup_failure = failure
         with self.assertRaisesRegex(Blocked, "TRIAL_CLEANUP_FAILED"): self.trial.run(self.fixture.job)
