@@ -26,7 +26,30 @@ CONFIG_HASHES = {
 }
 CRONTAB_SHA = "64b42edbd5f1ef1f339c5684754b3d61c792cdc48b665e154b127ccca6214d9a"
 
-CONTAINER_CONTROL = r'''
+PANE_GUARD = r'''
+import hashlib,shlex
+def validate_pane_link(pane,game,proc,arguments,start_command,children,startup_overrides=False):
+ if pane['dead'] or proc['uid']!=game['ownerUid'] or startup_overrides:raise ValueError('PANE_LINK_NOT_VERIFIED')
+ if pane['pid']==game['pid']:
+  if proc['startToken']!=game['startToken']:raise ValueError('PANE_PROCESS_CHANGED')
+  kind='direct_game'
+ else:
+  if (game['parentPid']!=pane['pid'] or proc['comm']!='sh' or len(arguments)!=3
+      or arguments[0] not in ['/bin/sh','sh'] or arguments[1]!='-c'
+      or children!=[game['pid']]):raise ValueError('PANE_PARENT_NOT_VERIFIED')
+  command=arguments[2]
+  if start_command!=command and shlex.split(start_command)!=[command]:raise ValueError('PANE_COMMAND_CHANGED')
+  lexer=shlex.shlex(command,posix=True,punctuation_chars=';&|<>()');lexer.whitespace_split=True;lexer.commenters=''
+  tokens=list(lexer)
+  if (not tokens or tokens[0]!='./7DaysToDieServer.x86_64' or any(c in command for c in '\r\n$`#')
+      or any(set(token)&set(';&|<>()') for token in tokens)):raise ValueError('PANE_WRAPPER_NOT_SINGLE_GAME')
+  kind='single_sh_game'
+ return {**pane,'paneStartToken':proc['startToken'],'gamePid':game['pid'],'gameStartToken':game['startToken'],
+         'startCommandSha256':hashlib.sha256(start_command.encode()).hexdigest(),'wrapperKind':kind}
+'''
+exec(compile(PANE_GUARD,'trusted-pane-guard','exec'))
+
+CONTAINER_CONTROL = PANE_GUARD + r'''
 import hashlib,json,os,pathlib,re,signal,subprocess,sys
 action=sys.argv[1];expected=json.loads(sys.argv[2])
 base=pathlib.Path('/home/sdtdserver')
@@ -37,7 +60,7 @@ def scan():
   try:
    comm=(p/'comm').read_text().strip();stat=(p/'stat').read_text().rsplit(')',1)[1].split()
    raw=(p/'cmdline').read_bytes().replace(b'\0',b' ')
-   obj={'pid':int(p.name),'startToken':stat[19],'state':stat[0]}
+   obj={'pid':int(p.name),'parentPid':int(stat[1]),'ownerUid':p.stat().st_uid,'startToken':stat[19],'state':stat[0]}
    if comm.startswith('7DaysToDie'):out['game'].append(obj)
    elif comm=='cron':out['cron'].append(obj)
    elif comm=='openvpn':out['vpn'].append(obj)
@@ -58,7 +81,25 @@ def pane():
  if len(lines)!=1:raise SystemExit(1)
  parts=lines[0].split()
  if len(parts) not in [3,4] or not re.fullmatch('%[0-9]+',parts[0]):raise SystemExit(1)
- return {'paneId':parts[0],'pid':int(parts[1]),'dead':int(parts[2]),'exitCode':int(parts[3]) if len(parts)==4 else None}
+ server=int(tmux(['display-message','-p','#{pid}']))
+ return {'paneId':parts[0],'pid':int(parts[1]),'dead':int(parts[2]),'exitCode':int(parts[3]) if len(parts)==4 else None,
+         'serverPid':server,'serverStartToken':(pathlib.Path('/proc',str(server))/'stat').read_text().rsplit(')',1)[1].split()[19],
+         'startCommandSha256':hashlib.sha256(tmux(['display-message','-p','-t',parts[0],'#{pane_start_command}']).encode()).hexdigest()}
+
+def live_pane(p,current):
+ if p['dead'] or len(current['game'])!=1:raise SystemExit(1)
+ path=pathlib.Path('/proc',str(p['pid']));stat=(path/'stat').read_text().rsplit(')',1)[1].split()
+ proc={'comm':(path/'comm').read_text().strip(),'uid':path.stat().st_uid,'startToken':stat[19]}
+ arguments=[arg.decode() for arg in (path/'cmdline').read_bytes().split(b'\0') if arg]
+ children=[]
+ for q in pathlib.Path('/proc').iterdir():
+  if not q.name.isdigit():continue
+  try:
+   if int((q/'stat').read_text().rsplit(')',1)[1].split()[1])==p['pid']:children.append(int(q.name))
+  except FileNotFoundError:continue
+ env=(path/'environ').read_bytes().split(b'\0')
+ overrides=any(x.split(b'=',1)[0] in [b'ENV',b'BASH_ENV'] and x.split(b'=',1)[1] for x in env if b'=' in x)
+ return validate_pane_link(p,current['game'][0],proc,arguments,tmux(['display-message','-p','-t',p['paneId'],'#{pane_start_command}']),children,overrides)
 current=scan()
 if action=='inspect':
  current['crontabSha256']=hashlib.sha256(pathlib.Path('/var/spool/cron/crontabs/sdtdserver').read_bytes()).hexdigest()
@@ -73,21 +114,23 @@ elif action in ['pause-cron','resume-cron']:
   if cron[0]['state'] in ['T','t']:os.kill(expected['pid'],signal.SIGCONT)
  print(json.dumps({'done':True}))
 elif action in ['inspect-pane','arm-pane']:
- p=pane()
- if p['dead'] or len(current['game'])!=1 or p['pid']!=current['game'][0]['pid']:raise SystemExit(1)
- original=tmux(['show-options','-v','-t','sdtdserver','remain-on-exit'])
+ p=live_pane(pane(),current)
+ original=tmux(['show-options','-A','-w','-v','-t','sdtdserver','remain-on-exit'])
+ inherited=not any(line.startswith('remain-on-exit ') for line in tmux(['show-options','-w','-t','sdtdserver']).splitlines())
  if original not in ['on','off']:raise SystemExit(1)
  if action=='arm-pane':
-  if p['paneId']!=expected['paneId'] or p['pid']!=expected['pid'] or original!=expected['originalRemainOnExit']:raise SystemExit(1)
-  tmux(['set-option','-t','sdtdserver','remain-on-exit','on'])
- print(json.dumps({**p,'originalRemainOnExit':original}))
+  if any(p[k]!=expected[k] for k in ['paneId','pid','paneStartToken','gamePid','gameStartToken','serverPid','serverStartToken','startCommandSha256','wrapperKind']) or original!=expected['originalRemainOnExit'] or inherited!=expected['originalOptionInherited']:raise SystemExit(1)
+  tmux(['set-option','-w','-t','sdtdserver','remain-on-exit','on'])
+ print(json.dumps({**p,'originalRemainOnExit':original,'originalOptionInherited':inherited}))
 elif action in ['pane-status','disarm-pane','remove-dead-pane']:
  p=pane()
- if p['paneId']!=expected['paneId'] or p['pid']!=expected['pid']:raise SystemExit(1)
+ if any(p[k]!=expected[k] for k in ['paneId','pid','serverPid','serverStartToken','startCommandSha256']):raise SystemExit(1)
+ if not p['dead'] and (pathlib.Path('/proc',str(p['pid']))/'stat').read_text().rsplit(')',1)[1].split()[19]!=expected['paneStartToken']:raise SystemExit(1)
  if action=='disarm-pane':
   original=expected['originalRemainOnExit']
   if original not in ['on','off']:raise SystemExit(1)
-  tmux(['set-option','-t','sdtdserver','remain-on-exit',original])
+  if expected['originalOptionInherited']:tmux(['set-option','-w','-u','-t','sdtdserver','remain-on-exit'])
+  else:tmux(['set-option','-w','-t','sdtdserver','remain-on-exit',original])
  elif action=='remove-dead-pane':
   if current['game'] or p['dead']!=1:raise SystemExit(1)
   tmux(['kill-session','-t','sdtdserver']) # Only a proven dead terminal; no game is killed.
@@ -155,7 +198,8 @@ class LiveBackend:
     def control(self, action, expected=None):
         user = "sdtdserver" if "pane" in action else "root"
         args = ["docker", "exec", "--user", user, CONTAINER, "/usr/bin/python3", "-c", CONTAINER_CONTROL, action, json.dumps(expected or {})]
-        return json.loads(self.runner.run(args, 30))
+        try:return json.loads(self.runner.run(args, 30))
+        except (Blocked,ValueError):raise Blocked('CONTROL_'+action.replace('-','_').upper()+'_FAILED') from None
 
     def require_assets(self):
         self.p.inspect_live()

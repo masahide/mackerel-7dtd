@@ -3,12 +3,16 @@ import copy
 import contextlib
 import io
 import json
+import os
+from pathlib import Path
 import socket
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
-from limited_maintenance import LimitedMaintenance, SHUTDOWN, TARGET, safe_result
+from limited_maintenance import LimitedMaintenance, SHUTDOWN, TARGET, safe_result, validate_pane_link
 from suzume_update import Blocked
 
 
@@ -33,7 +37,7 @@ class Backend:
     def release_lock(self):return nullcontext()
     def preflight(self):self.call('preflight');return {'cron':[{'pid':48,'startToken':'123','state':'S'}]}
     def pause_cron(self, state):self.call('pause_cron')
-    def inspect_pane(self):self.call('inspect_pane');return {'paneId':'%0','pid':234,'originalRemainOnExit':'off'}
+    def inspect_pane(self):self.call('inspect_pane');return {'paneId':'%0','pid':234,'originalRemainOnExit':'off','originalOptionInherited':True}
     def arm(self, pane):self.call('arm')
     def probe(self, zero=False):
         self.call('probe')
@@ -61,6 +65,7 @@ class LimitedMaintenanceTest(unittest.TestCase):
         self.assertLess(self.backend.calls.index('recover'),self.backend.calls.index('resume_cron'))
         pending=next(s for s in self.reservation.history if s['phase']=='arming_exit_observation')
         self.assertEqual(pending['pane']['originalRemainOnExit'],'off')
+        self.assertTrue(pending['pane']['originalOptionInherited'])
         self.assertTrue(pending['cronPauseAttempted'])
         self.assertIsNone(self.reservation.state)
 
@@ -133,6 +138,42 @@ class LimitedMaintenanceTest(unittest.TestCase):
                 self.assertEqual(result['shutdownSent'],count==0)
                 self.assertEqual(b'shutdown\r\n' in fake.sent,count==0)
                 self.assertNotIn(password,output.getvalue())
+
+
+class PaneLinkTest(unittest.TestCase):
+    def setUp(self):
+        self.pane={'paneId':'%0','pid':10,'dead':0}
+        self.game={'pid':12,'parentPid':10,'ownerUid':1000,'startToken':'123'}
+        self.proc={'uid':1000,'comm':'sh','startToken':'122'}
+        self.command='./7DaysToDieServer.x86_64 -configfile=sdtdserver.xml -batchmode'
+        self.args=['/bin/sh','-c',self.command]
+    def check(self,**overrides):
+        values={'pane':self.pane,'game':self.game,'proc':self.proc,'arguments':self.args,'start_command':'"'+self.command+'"','children':[12]}
+        values.update(overrides);return validate_pane_link(**values)
+    def test_observed_single_sh_child_preserves_both_process_identities(self):
+        result=self.check();self.assertEqual(result['wrapperKind'],'single_sh_game')
+        self.assertEqual(result['pid'],10);self.assertEqual(result['gamePid'],12)
+        self.assertEqual(result['paneStartToken'],'122');self.assertEqual(result['gameStartToken'],'123')
+    def test_wrong_parent_owner_extra_child_or_startup_hook_cannot_arm(self):
+        for values in [{'game':{**self.game,'parentPid':11}},{'proc':{**self.proc,'uid':0}},{'children':[12,13]},{'startup_overrides':True}]:
+            with self.subTest(values=values),self.assertRaises(ValueError):self.check(**values)
+    def test_unknown_shell_or_multi_command_cannot_report_game_exit(self):
+        for command in [self.command+'; true',self.command+' | cat',self.command+'\ntrue',self.command+' $(echo x)']:
+            with self.subTest(command=command),self.assertRaises(ValueError):self.check(arguments=['/bin/sh','-c',command],start_command=command)
+        with self.assertRaises(ValueError):self.check(arguments=['/bin/bash','-c',self.command])
+        with self.assertRaises(ValueError):self.check(start_command='different command')
+    def test_direct_game_requires_same_process_start_token(self):
+        game={**self.game,'pid':10};proc={**self.proc,'comm':'7DaysToDieServe','startToken':'123'}
+        self.assertEqual(self.check(game=game,proc=proc)['wrapperKind'],'direct_game')
+        with self.assertRaises(ValueError):self.check(game=game)
+
+    @unittest.skipUnless(os.name=='posix','Observed /bin/sh exit propagation runs on Linux CI')
+    def test_single_sh_propagates_child_failure_without_masking_it(self):
+        with tempfile.TemporaryDirectory() as task_tmp:
+            program=Path(task_tmp)/'7DaysToDieServer.x86_64'
+            program.write_text('#!/bin/sh\nexit 7\n');program.chmod(0o700)
+            result=subprocess.run(['/bin/sh','-c','./7DaysToDieServer.x86_64'],cwd=task_tmp,capture_output=True)
+            self.assertEqual(result.returncode,7)
 
 
 if __name__=='__main__':unittest.main()
