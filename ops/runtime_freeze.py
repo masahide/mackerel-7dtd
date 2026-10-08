@@ -1,0 +1,332 @@
+"""Prepare fixed recovery assets without stopping or starting the live game.
+
+The CLI has only a preparation ID. It does not accept host, path, shell, version,
+or image parameters. No backup verified receipt or production enablement occurs.
+"""
+from __future__ import annotations
+from contextlib import contextmanager
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+from suzume_update import ArchiveStore, Blocked, FrozenTarget, JOB, atomic_json, digest
+
+ROOT = Path("/home/masahide/work/7dtd")
+CONTAINER = "f043019c7471ff9d7c66eeb67676e4b94e856b25664ce5e77302ce247f6eafd3"
+IMAGE = "sha256:13ee1d0fd0047f5b53e274339ce500420cf82b554ff5f0190f60723c042da371"
+COMPOSE = "e2721c806c7a39f97eeeb0f3818e0e8fbcdbc7c5b094ade9e1742991ef6e0568"
+BUILD = "25661908"
+FIXED_ENV = {"START_MODE": "1", "UPDATE_MODS": "NO", "CPM_UPDATE": "NO",
+             "ALLOC_FIXES_UPDATE": "NO", "MONITOR": "NO", "BACKUP": "NO",
+             "TEST_ALERT": "NO", "CHANGE_CONFIG_DIR_OWNERSHIP": "NO"}
+
+# The same code is used for the live and frozen runtime. Only static launcher,
+# module and script bytes are read; no game console or network is contacted.
+CHECKPOINT = r'''
+import hashlib,json,pathlib
+base=pathlib.Path('/home/sdtdserver')
+files=[base/x for x in ['sdtdserver','linuxgsm.sh','user.sh','install.sh','openvpn.sh']]
+for root in [base/'scripts',base/'lgsm/modules']:
+ if not root.is_dir():raise RuntimeError('static runtime scope absent')
+ files+=sorted(p for p in root.rglob('*') if p.is_file())
+extra=pathlib.Path('/etc/openvpn/update-resolv-conf.sh')
+files.append(extra)
+out={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+print(json.dumps(out))
+'''
+
+
+class DockerRunner:
+    def run(self, args, timeout=1800):
+        try:
+            p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+            if p.returncode != 0:
+                raise Blocked("PREPARATION_COMMAND_FAILED")
+            return p.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            raise Blocked("PREPARATION_COMMAND_FAILED") from None
+
+
+def mod_inventory(root):
+    mods = root / "ServerFiles/Mods"
+    if not mods.is_dir() or mods.is_symlink():
+        raise Blocked("MOD_SCOPE_UNAVAILABLE")
+    result = {}
+    for p in sorted(mods.rglob("*")):
+        if p.is_symlink():
+            raise Blocked("MOD_LINK_UNSUPPORTED")
+        if p.is_file():
+            result[p.relative_to(mods).as_posix()] = digest(p)
+    if not result:
+        raise Blocked("MOD_SCOPE_UNAVAILABLE")
+    return result
+
+
+class RuntimePreparer:
+    def __init__(self, runner, root=ROOT, emit=lambda _: None):
+        # A test runner may use a generated fixture root. The real runner is
+        # restricted to the observed host/root and administrator execution.
+        if isinstance(runner, DockerRunner):
+            if (sys.platform != "linux" or os.geteuid() != 0 or socket.gethostname() != "7dtd01"
+                    or root != ROOT or root.is_symlink() or root.resolve() != ROOT):
+                raise Blocked("PRODUCTION_CONTEXT_MISMATCH")
+        self.runner, self.root, self.emit = runner, root, emit
+
+    def inspect_live(self):
+        cf = self.root / "docker-compose.yml"
+        if cf.is_symlink() or digest(cf) != COMPOSE:
+            raise Blocked("COMPOSE_CHANGED")
+        cid = self.runner.run(["docker", "compose", "-f", str(cf), "ps", "-q", "7dtdserver"], 30).strip()
+        if cid != CONTAINER:
+            raise Blocked("CONTAINER_CHANGED")
+        values = json.loads(self.runner.run(["docker", "inspect", cid], 30))
+        if len(values) != 1:
+            raise Blocked("CONTAINER_CHANGED")
+        ins = values[0]
+        if (ins["Image"] != IMAGE or ins["State"]["Status"] != "running"
+                or ins["Config"]["Entrypoint"] != ["/home/sdtdserver/openvpn.sh"]):
+            raise Blocked("RUNTIME_CHANGED")
+        python = self.runner.run(["docker", "exec", cid, "/bin/sh", "-c", "command -v python3"], 30).strip()
+        if python != "/usr/bin/python3":
+            raise Blocked("CONTAINER_PYTHON_PATH_UNCONFIRMED")
+        expected = {"ServerFiles": "/home/sdtdserver/serverfiles", "7DaysToDie": "/home/sdtdserver/.local/share/7DaysToDie",
+                    "LGSM-Config": "/home/sdtdserver/lgsm/config-lgsm/sdtdserver", "log": "/home/sdtdserver/log",
+                    "backups": "/home/sdtdserver/lgsm/backup"}
+        for name, destination in expected.items():
+            matches = [m for m in ins["Mounts"] if m["Destination"] == destination]
+            if (len(matches) != 1 or matches[0]["Type"] != "bind"
+                    or matches[0]["Source"] != str(self.root / name)):
+                raise Blocked("MOUNT_CHANGED")
+        manifest = self.root / "ServerFiles/steamapps/appmanifest_294420.acf"
+        if re.findall(r'"buildid"\s*"([0-9]+)"', manifest.read_text()) != [BUILD]:
+            raise Blocked("BUILD_CHANGED")
+        return ins
+
+    def checkpoint(self, frozen_image=None):
+        if frozen_image is None:
+            args = ["docker", "exec", CONTAINER, "/usr/bin/python3", "-c", CHECKPOINT]
+        else:
+            # No ports, VPN bind, host namespace, extra capability or game start.
+            args = ["docker", "run", "--rm", "--network", "none", "--cap-drop", "ALL", "--read-only",
+                    "--entrypoint", "/usr/bin/python3", frozen_image, "-c", CHECKPOINT]
+        result = json.loads(self.runner.run(args, 120))
+        if not result or any(not re.fullmatch(r"[0-9a-f]{64}", v) for v in result.values()):
+            raise Blocked("STATIC_RUNTIME_UNAVAILABLE")
+        return result
+
+    @contextmanager
+    def release_lock(self):
+        import fcntl
+        path = self.root / "ServerFiles/Mods/TrailwatchBridge/TrailwatchBridge.dll.release.lock"
+        if path.is_symlink() or not path.is_file():
+            raise Blocked("RELEASE_LOCK_UNAVAILABLE")
+        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+        except BlockingIOError:
+            raise Blocked("MOD_RELEASE_BUSY") from None
+        finally:
+            os.close(fd)
+
+    def resolve_frozen_image(self, preparation_id):
+        # Docker can hide untagged commit images in its default listing. Resolve
+        # the unique administrator label from all images and validate metadata,
+        # rather than trusting the CLI's human-facing commit output.
+        ids = set(self.runner.run(["docker", "image", "ls", "--all", "--filter",
+                                   "label=org.suzume.preparation=" + preparation_id,
+                                   "--no-trunc", "--quiet"], 30).splitlines())
+        if len(ids) != 1 or not all(re.fullmatch(r"sha256:[0-9a-f]{64}", i) for i in ids):
+            raise Blocked("FROZEN_IMAGE_ID_UNAVAILABLE")
+        frozen = ids.pop()
+        values = json.loads(self.runner.run(["docker", "image", "inspect", frozen], 30))
+        if len(values) != 1:
+            raise Blocked("FROZEN_IMAGE_METADATA_MISMATCH")
+        info = values[0]
+        config = info.get("Config") or {}
+        env = dict(x.split("=", 1) for x in (config.get("Env") or []) if "=" in x)
+        if (info.get("Id") != frozen or (config.get("Labels") or {}).get("org.suzume.preparation") != preparation_id
+                or config.get("Entrypoint") != ["/home/sdtdserver/openvpn.sh"]
+                or any(env.get(k) != v for k, v in FIXED_ENV.items())):
+            raise Blocked("FROZEN_IMAGE_METADATA_MISMATCH")
+        return frozen
+
+    def prepare(self, preparation_id, resume_image_id_failure=False):
+        if not isinstance(preparation_id, str) or not JOB.fullmatch(preparation_id):
+            raise Blocked("INVALID_PREPARATION_ID")
+        base = self.root / "upgrade-backups"
+        if base.is_symlink():
+            raise Blocked("UNSAFE_PREPARATION_DIRECTORY")
+        folder = base / ("adapter-preparation-" + preparation_id)
+        if resume_image_id_failure:
+            if folder.is_symlink() or not folder.is_dir():
+                raise Blocked("RESUME_STATE_UNAVAILABLE")
+            state = json.loads((folder / "state.json").read_text())
+            if (state.get("preparationId") != preparation_id or state.get("phase") != "failed"
+                    or state.get("errorCode") not in ["FROZEN_IMAGE_ID_UNAVAILABLE", "RESUME_LIVE_RUNTIME_CHANGED", "IMAGE_ID_MISMATCH"]
+                    or state.get("verified") is not False or state.get("runtimeRestored") is not False
+                    or state.get("productionEnabled") is not False or (folder / "target-serverfiles.tar").exists()):
+                raise Blocked("RESUME_STATE_NOT_SUPPORTED")
+            if state["errorCode"] == "IMAGE_ID_MISMATCH":
+                image = folder / "runtime-image.tar"
+                if image.is_symlink() or not image.is_file() or not state.get("frozenImageId"):
+                    raise Blocked("RESUME_STATE_NOT_SUPPORTED")
+            elif state.get("frozenImageId") or (folder / "runtime-image.tar").exists():
+                raise Blocked("RESUME_STATE_NOT_SUPPORTED")
+        else:
+            try:
+                folder.mkdir(mode=0o700)  # Never retry a possibly interrupted operation.
+            except FileExistsError:
+                raise Blocked("PREPARATION_EXISTS_INSPECT_STATE_FIRST") from None
+            state = {"preparationId": preparation_id, "phase": "checking", "createdAt": time.time(),
+                     "verified": False, "runtimeRestored": False, "productionEnabled": False}
+        def phase(value):
+            state["phase"] = value
+            state["updatedAt"] = time.time()
+            atomic_json(folder / "state.json", state)
+            self.emit({"preparationId": preparation_id, "phase": value})
+        try:
+            phase("checking")
+            with self.release_lock():
+                before = self.inspect_live()
+                if resume_image_id_failure:
+                    original = json.loads((folder / "container.private.json").read_text())
+                    if any(before.get(key) != original.get(key) for key in ["Id", "Image", "RestartCount", "Config"]):
+                        raise Blocked("RESUME_LIVE_RUNTIME_CHANGED")
+                    # Inspect mount order is unspecified. Compare all fields,
+                    # including external VPN binds, without relying on order.
+                    normalize = lambda ins: sorted(ins.get("Mounts", []), key=lambda m: m["Destination"])
+                    if normalize(before) != normalize(original):
+                        raise Blocked("RESUME_LIVE_RUNTIME_CHANGED")
+                    if before["State"].get("StartedAt") != original["State"].get("StartedAt"):
+                        raise Blocked("RESUME_LIVE_RUNTIME_CHANGED")
+                static = self.checkpoint()
+                mods = mod_inventory(self.root)
+                # A full private inspect is recovery input; never expose Env.
+                atomic_json(folder / "container.private.json", before)
+                if not resume_image_id_failure:
+                    phase("freezing_runtime")
+                    args = ["docker", "commit", "--pause=false", "--change", "LABEL org.suzume.preparation=" + preparation_id]
+                    for key, value in FIXED_ENV.items():
+                        args += ["--change", "ENV " + key + "=" + value]
+                    args.append(CONTAINER)
+                    output = self.runner.run(args, 600)
+                    state.update(commitOutputBytes=len(output.encode()), commitOutputSha256=hashlib.sha256(output.encode()).hexdigest())
+                else:
+                    state["recoveredExistingImage"] = True
+                    phase("resolving_existing_image")
+                frozen = self.resolve_frozen_image(preparation_id)
+                if state.get("frozenImageId") not in [None, frozen]:
+                    raise Blocked("RESUME_IMAGE_CHANGED")
+                state["frozenImageId"] = frozen
+                state.pop("errorCode", None)
+                phase("checking_frozen_runtime")
+                if self.checkpoint(frozen) != static or self.checkpoint() != static:
+                    raise Blocked("STATIC_RUNTIME_CHANGED")
+                image_info = json.loads(self.runner.run(["docker", "image", "inspect", frozen], 30))[0]
+                image_env = dict(x.split("=", 1) for x in image_info["Config"]["Env"] if "=" in x)
+                if any(image_env.get(k) != v for k, v in FIXED_ENV.items()):
+                    raise Blocked("FROZEN_START_FLAGS_MISMATCH")
+                phase("saving_runtime_image")
+                image = folder / "runtime-image.tar"
+                if not image.exists():
+                    self.runner.run(["docker", "image", "save", "--output", str(image), frozen], 1200)
+                elif image.is_symlink() or not image.is_file():
+                    raise Blocked("UNSAFE_IMAGE_EXPORT")
+                os.chmod(image, 0o600)
+                ArchiveStore.validate_image(image, frozen)
+                state.update(imageSha256=digest(image), imageBytes=image.stat().st_size)
+                phase("freezing_serverfiles")
+                payload = folder / "target-serverfiles.tar"
+                self.runner.run(["tar", "--acls", "--xattrs", "--numeric-owner", "-cpf", str(payload), "-C", str(self.root), "ServerFiles"], 1800)
+                os.chmod(payload, 0o600)
+                self.runner.run(["tar", "--acls", "--xattrs", "--compare", "--file", str(payload), "-C", str(self.root)], 1800)
+                target_sha = digest(payload)
+                FrozenTarget(payload, target_sha, BUILD, mods).verify()
+                if mod_inventory(self.root) != mods or self.checkpoint() != static:
+                    raise Blocked("PREPARATION_SOURCE_CHANGED")
+                self.inspect_live()
+                state.update(payloadSha256=target_sha, payloadBytes=payload.stat().st_size,
+                             steamBuild=BUILD, approvedModHashes=mods, staticRuntimeHashes=static,
+                             fixedStartupEnvironment=FIXED_ENV,
+                             targetVersion="Game version: V 3.3.0 (b18) Compatibility Version: V 3.3.0")
+                phase("prepared")
+                return {key: state[key] for key in ["preparationId", "phase", "frozenImageId", "imageSha256", "imageBytes",
+                                                   "payloadSha256", "payloadBytes", "steamBuild", "verified", "runtimeRestored", "productionEnabled"]}
+        except Exception as error:
+            state["errorCode"] = str(error) if isinstance(error, Blocked) else "PREPARATION_FAILED"
+            phase("failed")
+            raise Blocked(state["errorCode"]) from None
+
+    def stage_recovery_copy(self, preparation_id):
+        """Restore fixed ServerFiles to a NEW private copy, never live mounts."""
+        if not isinstance(preparation_id, str) or not JOB.fullmatch(preparation_id):
+            raise Blocked("INVALID_PREPARATION_ID")
+        folder = self.root / "upgrade-backups" / ("adapter-preparation-" + preparation_id)
+        if folder.is_symlink() or not folder.is_dir():
+            raise Blocked("PREPARATION_UNAVAILABLE")
+        state = json.loads((folder / "state.json").read_text())
+        if (state.get("preparationId") != preparation_id or state.get("phase") != "prepared"
+                or state.get("steamBuild") != BUILD or state.get("verified") is not False
+                or state.get("runtimeRestored") is not False or state.get("productionEnabled") is not False):
+            raise Blocked("PREPARATION_NOT_VERIFIED_FOR_COPY")
+        destination = folder / "restore-target-copy"
+        record = folder / "copy-rehearsal.json"
+        if destination.exists() or destination.is_symlink() or record.exists():
+            raise Blocked("STAGED_COPY_EXISTS_INSPECT_FIRST")
+        receipt = {"preparationId": preparation_id, "phase": "checking_copy", "createdAt": time.time(),
+                   "filesystemCopyRestored": False, "fullWorldBackup": False,
+                   "verified": False, "runtimeRestored": False, "productionEnabled": False}
+        def phase(value):
+            receipt["phase"] = value
+            atomic_json(record, receipt)
+            self.emit({"preparationId": preparation_id, "phase": value})
+        with self.release_lock():
+            try:
+                phase("checking_copy")
+                self.inspect_live()
+                if (self.checkpoint() != state["staticRuntimeHashes"]
+                        or mod_inventory(self.root) != state["approvedModHashes"]
+                        or self.resolve_frozen_image(preparation_id) != state["frozenImageId"]):
+                    raise Blocked("PREPARATION_SOURCE_CHANGED")
+                image = folder / "runtime-image.tar"
+                payload = folder / "target-serverfiles.tar"
+                if (image.is_symlink() or image.stat().st_size != state["imageBytes"]
+                        or digest(image) != state["imageSha256"] or payload.is_symlink()
+                        or payload.stat().st_size != state["payloadBytes"]):
+                    raise Blocked("PREPARATION_ARCHIVE_CHANGED")
+                if shutil.disk_usage(folder).free < state["payloadBytes"] * 2:
+                    raise Blocked("RECOVERY_COPY_SPACE_UNAVAILABLE")
+                ArchiveStore.validate_image(image, state["frozenImageId"])
+                phase("restoring_target_copy")
+                FrozenTarget(payload, state["payloadSha256"], BUILD, state["approvedModHashes"]).stage_copy(destination)
+                self.inspect_live()
+                if self.checkpoint() != state["staticRuntimeHashes"] or mod_inventory(self.root) != state["approvedModHashes"]:
+                    raise Blocked("PREPARATION_SOURCE_CHANGED")
+                receipt["filesystemCopyRestored"] = True
+                phase("target_copy_restored")
+                return receipt
+            except Exception as error:
+                receipt["errorCode"] = str(error) if isinstance(error, Blocked) else "COPY_REHEARSAL_FAILED"
+                phase("failed")
+                raise Blocked(receipt["errorCode"]) from None
+
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) != 3 or sys.argv[1] not in ["prepare", "resume-image-id-failure", "stage-copy"]:
+            raise Blocked("USE_PREPARATION_OPERATION_WITH_ID")
+        preparer = RuntimePreparer(DockerRunner(), emit=lambda data: print(json.dumps(data), flush=True))
+        output = preparer.stage_recovery_copy(sys.argv[2]) if sys.argv[1] == "stage-copy" else preparer.prepare(
+            sys.argv[2], resume_image_id_failure=sys.argv[1] == "resume-image-id-failure")
+        print(json.dumps(output), flush=True)
+    except Blocked as error:
+        print(json.dumps({"errorCode": str(error)}), flush=True)
+        sys.exit(1)
